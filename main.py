@@ -14,7 +14,7 @@ API_SECRET = os.getenv("BITGET_API_SECRET")
 PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
 BASE_URL = "https://api.bitget.com"
 SYMBOL = "SOLUSDT"
-MARGIN_RATIO = 1.0  # Usa el 100% del balance disponible para la orden
+MARGIN_RATIO = 0.01  # Usa el 100% del balance disponible para la orden
 
 HEADERS = {
     "ACCESS-KEY": API_KEY,
