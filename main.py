@@ -1,12 +1,16 @@
 from flask import Flask, request, jsonify
+import logging
 
 app = Flask(__name__)
+
+# Configura logging para que aparezca en Render
+logging.basicConfig(level=logging.INFO)
 
 @app.route('/', methods=['POST'])
 def webhook():
     data = request.json
-    print("🔔 Alerta recibida de TradingView:")
-    print(data)  # Esto mostrará en los logs el contenido del mensaje recibido
+    logging.info("🔔 Alerta recibida de TradingView:")
+    logging.info(data)  # Esto sí se mostrará en Render correctamente
     return jsonify({'status': 'ok'})
 
 @app.route('/', methods=['GET'])
