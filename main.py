@@ -1,23 +1,30 @@
-from flask import Flask, request
-import logging
 import os
+from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-# Logging
-logging.basicConfig(level=logging.INFO)
+# Cargar claves desde variables de entorno
+API_KEY = os.environ.get("BITGET_API_KEY")
+API_SECRET = os.environ.get("BITGET_SECRET")
+API_PASSPHRASE = os.environ.get("BITGET_PASSPHRASE")
 
 @app.route('/', methods=['POST'])
 def webhook():
-    data = request.get_json()
-    logging.info("📩 Alerta recibida: %s", data)
-    return 'OK', 200
+    data = request.json
+    signal = data.get("signal")
 
-@app.route('/', methods=['GET', 'HEAD', 'PUT', 'DELETE', 'PATCH'])
-def method_not_allowed():
-    return 'Método no permitido', 405
+    if not signal:
+        return jsonify({"error": "No signal provided"}), 400
 
-# Obtener el puerto que Render espera usar
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 10000))  # Si no está definida, usa 10000 por defecto
-    app.run(host='0.0.0.0', port=port)
+    print(f"📩 Señal recibida: {signal}")
+
+    if signal == "EXIT_CONFIRMED":
+        # Aquí iría la lógica para cerrar la posición en Bitget
+        print("🔐 Cerrando posición en Bitget... (simulado)")
+        # TODO: Implementar con llamada real a la API
+        return jsonify({"status": "exit confirmed received"}), 200
+
+    return jsonify({"status": "signal received"}), 200
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
