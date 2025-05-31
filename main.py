@@ -1,21 +1,21 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request
 import logging
 
 app = Flask(__name__)
 
-# Configura logging para que aparezca en Render
+# Configurar logging para que muestre mensajes en los logs de Render
 logging.basicConfig(level=logging.INFO)
 
 @app.route('/', methods=['POST'])
 def webhook():
-    data = request.json
-    logging.info("🔔 Alerta recibida de TradingView:")
-    logging.info(data)  # Esto sí se mostrará en Render correctamente
-    return jsonify({'status': 'ok'})
+    data = request.get_json()
 
-@app.route('/', methods=['GET'])
-def index():
-    return "Servidor activo y esperando alertas."
+    # Mostrar en logs qué mensaje fue recibido
+    logging.info("📩 Alerta recibida: %s", data)
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000)
+    return 'OK', 200
+
+# Si alguien accede con GET, devuelve método no permitido (opcional pero recomendado)
+@app.route('/', methods=['GET', 'HEAD', 'PUT', 'DELETE', 'PATCH'])
+def method_not_allowed():
+    return 'Método no permitido', 405
