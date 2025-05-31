@@ -1,4 +1,4 @@
-from flask import Flask, request
+from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
@@ -6,10 +6,12 @@ app = Flask(__name__)
 def webhook():
     data = request.json
     print("🔔 Alerta recibida de TradingView:")
-    print(data)
-    return 'OK', 200
+    print(data)  # Esto mostrará en los logs el contenido del mensaje recibido
+    return jsonify({'status': 'ok'})
+
+@app.route('/', methods=['GET'])
+def index():
+    return "Servidor activo y esperando alertas."
 
 if __name__ == '__main__':
-    import os
-    port = int(os.environ.get('PORT', 5000))  # Render asigna el puerto en esta variable
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=10000)
