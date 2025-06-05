@@ -12,7 +12,7 @@ app = Flask(__name__)
 API_KEY = os.getenv("BITGET_API_KEY")
 API_SECRET = os.getenv("BITGET_API_SECRET")
 PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
-BASE_URL = "https://api.bitget.com"
+BASE_URL = "https://api.bitgetapi.com"
 SYMBOL = "SOLUSDT"
 MARGIN_RATIO = 0.01  # Usa el 100% del balance disponible para la orden
 
