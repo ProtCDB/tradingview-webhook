@@ -55,6 +55,13 @@ def get_order_size(price):
     amount = balance * MARGIN_RATIO
     return round(amount / price, 3)
 
+# === Obtener precio actual del mercado ===
+def get_market_price():
+    url = f"/api/v2/mix/market/ticker?symbol={SYMBOL}"
+    full_url = BASE_URL + url
+    resp = requests.get(full_url)
+    return float(resp.json()["data"]["last"])
+
 # === Ejecutar orden ===
 def place_order(side):
     market_price = get_market_price()
@@ -92,12 +99,10 @@ def close_positions():
     resp = requests.post(full_url, headers=headers, data=json_body)
     print(f"🔴 CIERRE FORZADO: {resp.status_code}, {resp.text}")
 
-# === Obtener precio actual del mercado ===
-def get_market_price():
-    url = f"/api/v2/mix/market/ticker?symbol={SYMBOL}"
-    full_url = BASE_URL + url
-    resp = requests.get(full_url)
-    return float(resp.json()["data"]["last"])
+# === Ruta opcional para responder a GET y HEAD (Render keep-alive) ===
+@app.route("/", methods=["GET", "HEAD"])
+def index():
+    return "👋 Webhook activo", 200
 
 # === Webhook Handler ===
 @app.route("/", methods=["POST"])
@@ -111,9 +116,7 @@ def webhook():
             place_order("BUY")
         elif signal == "ENTRY_SHORT":
             place_order("SELL")
-        elif signal == "EXIT_CONFIRMED":
-            close_positions()
-        elif signal in ["EXIT_LONG_TP", "EXIT_LONG_SL", "EXIT_SHORT_TP", "EXIT_SHORT_SL"]:
+        elif signal in ["EXIT_CONFIRMED", "EXIT_LONG_SL", "EXIT_LONG_TP", "EXIT_SHORT_SL", "EXIT_SHORT_TP"]:
             close_positions()
         else:
             print("❌ Señal no reconocida")
@@ -124,17 +127,8 @@ def webhook():
         print(f"⚠️ Error: {e}")
         return jsonify({"error": str(e)}), 400
 
-# === Verificación de API al iniciar ===
-def validate_api():
-    try:
-        balance = get_balance()
-        print(f"✅ API válida. Balance disponible: {balance:.2f} USDT")
-    except Exception as e:
-        print(f"❌ Error en claves API o conexión: {e}")
-
 # === Iniciar Servidor ===
 if __name__ == "__main__":
-    validate_api()
     app.run(host="0.0.0.0", port=10000)
 
 
