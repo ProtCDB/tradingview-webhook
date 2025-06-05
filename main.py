@@ -53,7 +53,7 @@ def get_balance():
 def get_order_size(price):
     balance = get_balance()
     amount = balance * MARGIN_RATIO
-    return round(amount / price, 3)  # Redondeamos a 3 decimales
+    return round(amount / price, 3)
 
 # === Ejecutar orden ===
 def place_order(side):
@@ -124,7 +124,17 @@ def webhook():
         print(f"⚠️ Error: {e}")
         return jsonify({"error": str(e)}), 400
 
+# === Verificación de API al iniciar ===
+def validate_api():
+    try:
+        balance = get_balance()
+        print(f"✅ API válida. Balance disponible: {balance:.2f} USDT")
+    except Exception as e:
+        print(f"❌ Error en claves API o conexión: {e}")
+
 # === Iniciar Servidor ===
 if __name__ == "__main__":
+    validate_api()
     app.run(host="0.0.0.0", port=10000)
+
 
