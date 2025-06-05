@@ -5,3 +5,10 @@ services:
     plan: free
     buildCommand: ""
     startCommand: "python main.py"
+    envVars:
+      - key: BITGET_API_KEY
+        fromDotEnv: true
+      - key: BITGET_API_SECRET
+        fromDotEnv: true
+      - key: BITGET_API_PASSPHRASE
+        fromDotEnv: true
