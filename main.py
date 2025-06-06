@@ -108,12 +108,7 @@ def index():
 @app.route("/", methods=["POST"])
 def webhook():
     try:
-        try:
-            data = request.get_json(force=True)
-        except Exception as ex:
-            print(f"⚠️ Error al interpretar JSON: {ex}")
-            return jsonify({"error": f"JSON inválido: {ex}"}), 400
-
+        data = request.get_json(force=True)
         signal = data.get("signal", "")
         print(f"📨 Señal recibida: {signal}")
 
@@ -129,8 +124,9 @@ def webhook():
         return jsonify({"status": "ok"})
 
     except Exception as e:
-        print(f"⚠️ Error general: {e}")
+        print(f"⚠️ Error: {e}")
         return jsonify({"error": str(e)}), 400
+
 
 # === Iniciar Servidor ===
 if __name__ == "__main__":
