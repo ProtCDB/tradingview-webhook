@@ -108,9 +108,14 @@ def index():
 @app.route("/", methods=["POST"])
 def webhook():
     try:
-        data = request.get_json(force=True)
-        signal = data.get("signal", "")
-        print(f"📨 Señal recibida: {signal}")
+        raw_data = request.data
+        print(f"📦 Raw data recibida: {raw_data}")
+
+        json_data = request.get_json(force=True)
+        print(f"📨 JSON parseado: {json_data}")
+
+        signal = json_data.get("signal", "")
+        print(f"📍 Señal recibida: {signal}")
 
         if signal == "ENTRY_LONG":
             place_order("BUY")
@@ -124,8 +129,9 @@ def webhook():
         return jsonify({"status": "ok"})
 
     except Exception as e:
-        print(f"⚠️ Error: {e}")
+        print(f"⚠️ Error procesando webhook: {e}")
         return jsonify({"error": str(e)}), 400
+
 
 
 # === Iniciar Servidor ===
