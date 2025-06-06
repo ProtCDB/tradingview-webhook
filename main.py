@@ -8,27 +8,40 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-# === Variables de entorno ===
-API_KEY = os.getenv("BITGET_API_KEY")
-API_SECRET = os.getenv("BITGET_API_SECRET")
-PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
-
-BASE_URL = "https://api.bitget.com"
+BASE_URL = "https://api.bitget.com"  # usa api-demo.bitget.com si estás en entorno demo
 SYMBOL = "SOLUSDT"
-MARGIN_RATIO = 0.01  # Usa el 1% del balance disponible
+MARGIN_RATIO = 0.01  # 1% del balance disponible
 
-HEADERS = {
-    "ACCESS-KEY": API_KEY or "",
-    "ACCESS-PASSPHRASE": PASSPHRASE or "",
-    "Content-Type": "application/json"
-}
+API_KEY = None
+API_SECRET = None
+PASSPHRASE = None
+HEADERS = {}
 
+# === Cargar claves ===
+def load_env_vars():
+    global API_KEY, API_SECRET, PASSPHRASE, HEADERS
+    API_KEY = os.getenv("BITGET_API_KEY")
+    API_SECRET = os.getenv("BITGET_API_SECRET")
+    PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
+
+    if not API_KEY or not API_SECRET or not PASSPHRASE:
+        raise Exception("❌ Faltan variables de entorno: BITGET_API_KEY, BITGET_API_SECRET o BITGET_API_PASSPHRASE")
+
+    HEADERS = {
+        "ACCESS-KEY": API_KEY,
+        "ACCESS-PASSPHRASE": PASSPHRASE,
+        "Content-Type": "application/json"
+    }
+
+# === Timestamp ===
 def get_timestamp():
     return str(int(time.time() * 1000))
 
+# === Firma HMAC ===
 def sign(message: str):
     return hmac.new(API_SECRET.encode(), message.encode(), hashlib.sha256).hexdigest()
 
+# === Autenticación ===
 def auth_headers(method, path, body=""):
     timestamp = get_timestamp()
     prehash = f"{timestamp}{method}{path}{body}"
@@ -38,6 +51,7 @@ def auth_headers(method, path, body=""):
     headers["ACCESS-TIMESTAMP"] = timestamp
     return headers
 
+# === Obtener balance USDT disponible ===
 def get_balance():
     url = "/api/v2/mix/account/accounts?productType=USDT"
     full_url = BASE_URL + url
@@ -50,6 +64,7 @@ def get_balance():
             return float(asset["available"])
     return 0.0
 
+# === Obtener precio de mercado ===
 def get_market_price():
     url = f"/api/v2/mix/market/ticker?symbol={SYMBOL}"
     full_url = BASE_URL + url
@@ -57,13 +72,16 @@ def get_market_price():
     print("💰 Precio de mercado:", resp.json())
     return float(resp.json()["data"]["last"])
 
+# === Calcular tamaño de orden ===
 def get_order_size(price):
     balance = get_balance()
     amount = balance * MARGIN_RATIO
     return round(amount / price, 3)
 
+# === Ejecutar orden ===
 def place_order(side):
     try:
+        load_env_vars()
         market_price = get_market_price()
         size = get_order_size(market_price)
         direction = "open_long" if side == "BUY" else "open_short"
@@ -88,8 +106,10 @@ def place_order(side):
     except Exception as e:
         print("❌ Error en place_order:", str(e))
 
+# === Cerrar posiciones ===
 def close_positions():
     try:
+        load_env_vars()
         url = "/api/v2/mix/position/close-position"
         full_url = BASE_URL + url
         body = {
@@ -103,10 +123,12 @@ def close_positions():
     except Exception as e:
         print("❌ Error en close_positions:", str(e))
 
+# === Endpoint keep-alive ===
 @app.route("/", methods=["GET", "HEAD"])
 def index():
     return "✅ Webhook activo", 200
 
+# === Webhook principal ===
 @app.route("/", methods=["POST"])
 def webhook():
     try:
@@ -133,8 +155,6 @@ def webhook():
         print(f"⚠️ Error general en webhook: {e}")
         return jsonify({"error": str(e)}), 400
 
-# ✅ Sólo se ejecuta en local
+# === Ejecutar servidor ===
 if __name__ == "__main__":
-    if not API_KEY or not API_SECRET or not PASSPHRASE:
-        raise Exception("❌ Faltan variables de entorno: BITGET_API_KEY, BITGET_API_SECRET o BITGET_API_PASSPHRASE")
     app.run(host="0.0.0.0", port=10000)
