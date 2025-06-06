@@ -13,7 +13,7 @@ API_KEY = os.getenv("BITGET_API_KEY")
 API_SECRET = os.getenv("BITGET_API_SECRET")
 PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
 
-BASE_URL = "https://api.bitget.com"
+BASE_URL = "https://api-demo.bitget.com"
 SYMBOL = "SOLUSDT"
 MARGIN_RATIO = 0.01  # Usa el 1% del balance disponible
 
