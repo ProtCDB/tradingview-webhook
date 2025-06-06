@@ -43,7 +43,7 @@ def get_balance():
     full_url = BASE_URL + url
     headers = auth_headers("GET", url)
     resp = requests.get(full_url, headers=headers)
-    data = resp.json()
+    data = request.get_json(force=True)
     for asset in data["data"]:
         if asset["marginCoin"] == "USDT":
             return float(asset["available"])
