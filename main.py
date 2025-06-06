@@ -12,18 +12,14 @@ app = Flask(__name__)
 API_KEY = os.getenv("BITGET_API_KEY")
 API_SECRET = os.getenv("BITGET_API_SECRET")
 PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
-BASE_URL = os.getenv("BITGET_API_BASE_URL", "https://api.bitgetapi.com")  # URL correcta para entorno demo
 
-# Validación de variables
-if not API_KEY or not API_SECRET or not PASSPHRASE:
-    raise Exception("❌ Faltan variables de entorno: BITGET_API_KEY, BITGET_API_SECRET o BITGET_API_PASSPHRASE")
-
+BASE_URL = "https://api-demo.bitget.com"
 SYMBOL = "SOLUSDT"
 MARGIN_RATIO = 0.01  # Usa el 1% del balance disponible
 
 HEADERS = {
-    "ACCESS-KEY": API_KEY,
-    "ACCESS-PASSPHRASE": PASSPHRASE,
+    "ACCESS-KEY": API_KEY or "",
+    "ACCESS-PASSPHRASE": PASSPHRASE or "",
     "Content-Type": "application/json"
 }
 
@@ -137,5 +133,8 @@ def webhook():
         print(f"⚠️ Error general en webhook: {e}")
         return jsonify({"error": str(e)}), 400
 
+# ✅ Sólo se ejecuta en local
 if __name__ == "__main__":
+    if not API_KEY or not API_SECRET or not PASSPHRASE:
+        raise Exception("❌ Faltan variables de entorno: BITGET_API_KEY, BITGET_API_SECRET o BITGET_API_PASSPHRASE")
     app.run(host="0.0.0.0", port=10000)
