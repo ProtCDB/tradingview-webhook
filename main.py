@@ -8,18 +8,12 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-BASE_URL = "https://api.bitget.com"  # usa api-demo.bitget.com si estás en entorno demo
+BASE_URL = "https://api-demo.bitget.com"  # Cambia a https://api.bitget.com si vas a real
 SYMBOL = "SOLUSDT"
-MARGIN_RATIO = 0.01  # 1% del balance disponible
+MARGIN_RATIO = 0.01  # Usa el 1% del balance disponible
 
-API_KEY = None
-API_SECRET = None
-PASSPHRASE = None
-HEADERS = {}
-
-# === Cargar claves ===
-def load_env_vars():
-    global API_KEY, API_SECRET, PASSPHRASE, HEADERS
+# === Obtener credenciales desde variables de entorno ===
+def get_api_credentials():
     API_KEY = os.getenv("BITGET_API_KEY")
     API_SECRET = os.getenv("BITGET_API_SECRET")
     PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
@@ -27,29 +21,30 @@ def load_env_vars():
     if not API_KEY or not API_SECRET or not PASSPHRASE:
         raise Exception("❌ Faltan variables de entorno: BITGET_API_KEY, BITGET_API_SECRET o BITGET_API_PASSPHRASE")
 
-    HEADERS = {
-        "ACCESS-KEY": API_KEY,
-        "ACCESS-PASSPHRASE": PASSPHRASE,
-        "Content-Type": "application/json"
-    }
+    return API_KEY, API_SECRET, PASSPHRASE
 
 # === Timestamp ===
 def get_timestamp():
     return str(int(time.time() * 1000))
 
 # === Firma HMAC ===
-def sign(message: str):
-    return hmac.new(API_SECRET.encode(), message.encode(), hashlib.sha256).hexdigest()
+def sign(message: str, secret: str):
+    return hmac.new(secret.encode(), message.encode(), hashlib.sha256).hexdigest()
 
 # === Autenticación ===
 def auth_headers(method, path, body=""):
+    API_KEY, API_SECRET, PASSPHRASE = get_api_credentials()
     timestamp = get_timestamp()
     prehash = f"{timestamp}{method}{path}{body}"
-    signature = sign(prehash)
-    headers = HEADERS.copy()
-    headers["ACCESS-SIGN"] = signature
-    headers["ACCESS-TIMESTAMP"] = timestamp
-    return headers
+    signature = sign(prehash, API_SECRET)
+
+    return {
+        "ACCESS-KEY": API_KEY,
+        "ACCESS-PASSPHRASE": PASSPHRASE,
+        "ACCESS-SIGN": signature,
+        "ACCESS-TIMESTAMP": timestamp,
+        "Content-Type": "application/json"
+    }
 
 # === Obtener balance USDT disponible ===
 def get_balance():
@@ -81,7 +76,6 @@ def get_order_size(price):
 # === Ejecutar orden ===
 def place_order(side):
     try:
-        load_env_vars()
         market_price = get_market_price()
         size = get_order_size(market_price)
         direction = "open_long" if side == "BUY" else "open_short"
@@ -109,7 +103,6 @@ def place_order(side):
 # === Cerrar posiciones ===
 def close_positions():
     try:
-        load_env_vars()
         url = "/api/v2/mix/position/close-position"
         full_url = BASE_URL + url
         body = {
@@ -154,7 +147,3 @@ def webhook():
     except Exception as e:
         print(f"⚠️ Error general en webhook: {e}")
         return jsonify({"error": str(e)}), 400
-
-# === Ejecutar servidor ===
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
