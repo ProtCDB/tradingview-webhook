@@ -17,7 +17,7 @@ PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
 if not API_KEY or not API_SECRET or not PASSPHRASE:
     raise Exception("❌ Faltan variables de entorno: BITGET_API_KEY, BITGET_API_SECRET o BITGET_API_PASSPHRASE")
 
-BASE_URL = "https://api.bitgetapi.com"  # Asegúrate que sea demo o real según estés probando
+BASE_URL = "https://api-demo.bitget.com"  # Asegúrate que sea demo o real según estés probando
 SYMBOL = "SOLUSDT"
 MARGIN_RATIO = 0.01  # Usa el 1% del balance disponible
 
