@@ -14,7 +14,7 @@ API_SECRET = os.getenv("BITGET_API_SECRET")
 PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
 BASE_URL = "https://api.bitgetapi.com"
 SYMBOL = "SOLUSDT"
-MARGIN_RATIO = 0.01  # Usa el 100% del balance disponible para la orden
+MARGIN_RATIO = 0.01  # Usa el 1% del balance disponible para la orden
 
 HEADERS = {
     "ACCESS-KEY": API_KEY,
@@ -108,7 +108,12 @@ def index():
 @app.route("/", methods=["POST"])
 def webhook():
     try:
-        data = request.json
+        try:
+            data = request.get_json(force=True)
+        except Exception as ex:
+            print(f"⚠️ Error al interpretar JSON: {ex}")
+            return jsonify({"error": f"JSON inválido: {ex}"}), 400
+
         signal = data.get("signal", "")
         print(f"📨 Señal recibida: {signal}")
 
@@ -124,11 +129,9 @@ def webhook():
         return jsonify({"status": "ok"})
 
     except Exception as e:
-        print(f"⚠️ Error: {e}")
+        print(f"⚠️ Error general: {e}")
         return jsonify({"error": str(e)}), 400
 
 # === Iniciar Servidor ===
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
-
-
