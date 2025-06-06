@@ -8,15 +8,20 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-BASE_URL = "https://api-demo.bitget.com"  # Cambia a https://api.bitget.com si vas a real
+BASE_URL = "https://api-demo.bitget.com"  # Usa https://api.bitget.com para real
 SYMBOL = "SOLUSDT"
-MARGIN_RATIO = 0.01  # Usa el 1% del balance disponible
+MARGIN_RATIO = 0.01
 
-# === Obtener credenciales desde variables de entorno ===
+# === Obtener credenciales desde variables de entorno (con impresión segura) ===
 def get_api_credentials():
     API_KEY = os.getenv("BITGET_API_KEY")
     API_SECRET = os.getenv("BITGET_API_SECRET")
     PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
+
+    print("🔐 Verificación de entorno:")
+    print(f"  BITGET_API_KEY presente: {bool(API_KEY)}")
+    print(f"  BITGET_API_SECRET presente: {bool(API_SECRET)}")
+    print(f"  BITGET_API_PASSPHRASE presente: {bool(PASSPHRASE)}")
 
     if not API_KEY or not API_SECRET or not PASSPHRASE:
         raise Exception("❌ Faltan variables de entorno: BITGET_API_KEY, BITGET_API_SECRET o BITGET_API_PASSPHRASE")
