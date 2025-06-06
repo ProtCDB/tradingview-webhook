@@ -101,6 +101,9 @@ def index():
 @app.route("/", methods=["POST"])
 def webhook():
     try:
+        print("🟡 RAW BODY:", request.data)
+        print("🟡 HEADERS:", request.headers)
+
         data = request.get_json(force=True, silent=True)
         if not data:
             return jsonify({"error": "No se recibió JSON válido"}), 400
@@ -115,7 +118,6 @@ def webhook():
         elif signal in ["EXIT_CONFIRMED", "EXIT_LONG_SL", "EXIT_LONG_TP", "EXIT_SHORT_SL", "EXIT_SHORT_TP"]:
             close_positions()
         else:
-            print("❌ Señal no reconocida")
             return jsonify({"error": "Señal no reconocida"}), 400
 
         return jsonify({"status": "ok"})
@@ -124,5 +126,7 @@ def webhook():
         print(f"⚠️ Error: {e}")
         return jsonify({"error": str(e)}), 400
 
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    port = int(os.environ.get("PORT", 10000))
+app.run(host="0.0.0.0", port=port)
