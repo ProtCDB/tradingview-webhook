@@ -37,32 +37,28 @@ def auth_headers(method, path, body=""):
     headers["ACCESS-TIMESTAMP"] = timestamp
     return headers
 
-# === Obtener balance disponible en USDT ===
 def get_balance():
     url = "/api/v2/mix/account/accounts?productType=USDT"
     full_url = BASE_URL + url
     headers = auth_headers("GET", url)
     resp = requests.get(full_url, headers=headers)
-    data = request.get_json(force=True)
+    data = resp.json()
     for asset in data["data"]:
         if asset["marginCoin"] == "USDT":
             return float(asset["available"])
     return 0.0
 
-# === Calcular tamaño de orden ===
 def get_order_size(price):
     balance = get_balance()
     amount = balance * MARGIN_RATIO
     return round(amount / price, 3)
 
-# === Obtener precio actual del mercado ===
 def get_market_price():
     url = f"/api/v2/mix/market/ticker?symbol={SYMBOL}"
     full_url = BASE_URL + url
     resp = requests.get(full_url)
     return float(resp.json()["data"]["last"])
 
-# === Ejecutar orden ===
 def place_order(side):
     market_price = get_market_price()
     size = get_order_size(market_price)
@@ -86,7 +82,6 @@ def place_order(side):
     resp = requests.post(full_url, headers=headers, data=json_body)
     print(f"🟢 ORDEN ENVIADA ({side}): {resp.status_code}, {resp.text}")
 
-# === Cerrar todas las posiciones ===
 def close_positions():
     url = "/api/v2/mix/position/close-position"
     full_url = BASE_URL + url
@@ -99,28 +94,19 @@ def close_positions():
     resp = requests.post(full_url, headers=headers, data=json_body)
     print(f"🔴 CIERRE FORZADO: {resp.status_code}, {resp.text}")
 
-# === Ruta opcional para responder a GET y HEAD (Render keep-alive) ===
 @app.route("/", methods=["GET", "HEAD"])
 def index():
-    return "👋 Webhook activo", 200
+    return "✅ Webhook activo", 200
 
-# === Webhook Handler ===
 @app.route("/", methods=["POST"])
 def webhook():
     try:
-        print("=== Nueva solicitud recibida ===")
-        print("🔍 Headers:")
-        print(dict(request.headers))
-        print("📦 request.data:")
-        print(request.data)
-        print("📤 request.get_data(as_text=True):")
-        print(request.get_data(as_text=True))
+        data = request.get_json(force=True, silent=True)
+        if not data:
+            return jsonify({"error": "No se recibió JSON válido"}), 400
 
-        json_data = request.get_json(force=True)
-        print("✅ JSON parseado:", json_data)
-
-        signal = json_data.get("signal", "")
-        print(f"📍 Señal recibida: {signal}")
+        signal = data.get("signal", "")
+        print(f"📨 Señal recibida: {signal}")
 
         if signal == "ENTRY_LONG":
             place_order("BUY")
@@ -130,17 +116,13 @@ def webhook():
             close_positions()
         else:
             print("❌ Señal no reconocida")
+            return jsonify({"error": "Señal no reconocida"}), 400
 
         return jsonify({"status": "ok"})
 
     except Exception as e:
-        print(f"⚠️ Error procesando webhook: {e}")
+        print(f"⚠️ Error: {e}")
         return jsonify({"error": str(e)}), 400
 
-
-
-
-# === Iniciar Servidor ===
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=10000)
