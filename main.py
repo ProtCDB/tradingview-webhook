@@ -8,13 +8,18 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-# === Configuración ===
+# === Variables de entorno ===
 API_KEY = os.getenv("BITGET_API_KEY")
 API_SECRET = os.getenv("BITGET_API_SECRET")
 PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
-BASE_URL = "https://api.bitgetapi.com"
+
+# Validación de variables
+if not API_KEY or not API_SECRET or not PASSPHRASE:
+    raise Exception("❌ Faltan variables de entorno: BITGET_API_KEY, BITGET_API_SECRET o BITGET_API_PASSPHRASE")
+
+BASE_URL = "https://api.bitgetapi.com"  # Asegúrate que sea demo o real según estés probando
 SYMBOL = "SOLUSDT"
-MARGIN_RATIO = 0.01  # Usa el 1% del balance disponible para la orden
+MARGIN_RATIO = 0.01  # Usa el 1% del balance disponible
 
 HEADERS = {
     "ACCESS-KEY": API_KEY,
@@ -22,12 +27,15 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
+# === Timestamp ===
 def get_timestamp():
     return str(int(time.time() * 1000))
 
+# === Firma HMAC ===
 def sign(message: str):
     return hmac.new(API_SECRET.encode(), message.encode(), hashlib.sha256).hexdigest()
 
+# === Autenticación ===
 def auth_headers(method, path, body=""):
     timestamp = get_timestamp()
     prehash = f"{timestamp}{method}{path}{body}"
@@ -37,79 +45,92 @@ def auth_headers(method, path, body=""):
     headers["ACCESS-TIMESTAMP"] = timestamp
     return headers
 
+# === Obtener balance USDT disponible ===
 def get_balance():
     url = "/api/v2/mix/account/accounts?productType=USDT"
     full_url = BASE_URL + url
     headers = auth_headers("GET", url)
     resp = requests.get(full_url, headers=headers)
     data = resp.json()
-    for asset in data["data"]:
+    print("📊 Balance response:", data)
+    for asset in data.get("data", []):
         if asset["marginCoin"] == "USDT":
             return float(asset["available"])
     return 0.0
 
+# === Obtener precio de mercado ===
+def get_market_price():
+    url = f"/api/v2/mix/market/ticker?symbol={SYMBOL}"
+    full_url = BASE_URL + url
+    resp = requests.get(full_url)
+    print("💰 Precio de mercado:", resp.json())
+    return float(resp.json()["data"]["last"])
+
+# === Calcular tamaño de orden ===
 def get_order_size(price):
     balance = get_balance()
     amount = balance * MARGIN_RATIO
     return round(amount / price, 3)
 
-def get_market_price():
-    url = f"/api/v2/mix/market/ticker?symbol={SYMBOL}"
-    full_url = BASE_URL + url
-    resp = requests.get(full_url)
-    return float(resp.json()["data"]["last"])
-
+# === Ejecutar orden ===
 def place_order(side):
-    market_price = get_market_price()
-    size = get_order_size(market_price)
-    direction = "open_long" if side == "BUY" else "open_short"
+    try:
+        market_price = get_market_price()
+        size = get_order_size(market_price)
+        direction = "open_long" if side == "BUY" else "open_short"
 
-    url = "/api/v2/mix/order/place-order"
-    full_url = BASE_URL + url
-    body = {
-        "symbol": SYMBOL,
-        "marginCoin": "USDT",
-        "side": side,
-        "orderType": "market",
-        "size": str(size),
-        "price": "",
-        "timeInForceValue": "normal",
-        "orderDirection": direction,
-        "productType": "USDT-FUTURES"
-    }
-    json_body = json.dumps(body)
-    headers = auth_headers("POST", url, json_body)
-    resp = requests.post(full_url, headers=headers, data=json_body)
-    print(f"🟢 ORDEN ENVIADA ({side}): {resp.status_code}, {resp.text}")
+        url = "/api/v2/mix/order/place-order"
+        full_url = BASE_URL + url
+        body = {
+            "symbol": SYMBOL,
+            "marginCoin": "USDT",
+            "side": side,
+            "orderType": "market",
+            "size": str(size),
+            "price": "",
+            "timeInForceValue": "normal",
+            "orderDirection": direction,
+            "productType": "USDT-FUTURES"
+        }
+        json_body = json.dumps(body)
+        headers = auth_headers("POST", url, json_body)
+        resp = requests.post(full_url, headers=headers, data=json_body)
+        print(f"🟢 ORDEN ENVIADA ({side}): {resp.status_code}, {resp.text}")
+    except Exception as e:
+        print("❌ Error en place_order:", str(e))
 
+# === Cerrar posiciones ===
 def close_positions():
-    url = "/api/v2/mix/position/close-position"
-    full_url = BASE_URL + url
-    body = {
-        "symbol": SYMBOL,
-        "marginCoin": "USDT"
-    }
-    json_body = json.dumps(body)
-    headers = auth_headers("POST", url, json_body)
-    resp = requests.post(full_url, headers=headers, data=json_body)
-    print(f"🔴 CIERRE FORZADO: {resp.status_code}, {resp.text}")
+    try:
+        url = "/api/v2/mix/position/close-position"
+        full_url = BASE_URL + url
+        body = {
+            "symbol": SYMBOL,
+            "marginCoin": "USDT"
+        }
+        json_body = json.dumps(body)
+        headers = auth_headers("POST", url, json_body)
+        resp = requests.post(full_url, headers=headers, data=json_body)
+        print(f"🔴 CIERRE FORZADO: {resp.status_code}, {resp.text}")
+    except Exception as e:
+        print("❌ Error en close_positions:", str(e))
 
+# === Endpoint keep-alive ===
 @app.route("/", methods=["GET", "HEAD"])
 def index():
     return "✅ Webhook activo", 200
 
+# === Webhook principal ===
 @app.route("/", methods=["POST"])
 def webhook():
     try:
-        print("🟡 RAW BODY:", request.data)
-        print("🟡 HEADERS:", request.headers)
+        data = request.get_json(force=True)
+        print("📨 Payload recibido:", data)
 
-        data = request.get_json(force=True, silent=True)
-        if not data:
-            return jsonify({"error": "No se recibió JSON válido"}), 400
+        if not data or "signal" not in data:
+            return jsonify({"error": "No se recibió 'signal' en el JSON"}), 400
 
-        signal = data.get("signal", "")
-        print(f"📨 Señal recibida: {signal}")
+        signal = data["signal"]
 
         if signal == "ENTRY_LONG":
             place_order("BUY")
@@ -118,15 +139,15 @@ def webhook():
         elif signal in ["EXIT_CONFIRMED", "EXIT_LONG_SL", "EXIT_LONG_TP", "EXIT_SHORT_SL", "EXIT_SHORT_TP"]:
             close_positions()
         else:
-            return jsonify({"error": "Señal no reconocida"}), 400
+            print("⚠️ Señal no reconocida:", signal)
 
         return jsonify({"status": "ok"})
 
     except Exception as e:
-        print(f"⚠️ Error: {e}")
+        print(f"⚠️ Error general en webhook: {e}")
         return jsonify({"error": str(e)}), 400
 
-
+# === Ejecutar servidor ===
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=10000)
+
