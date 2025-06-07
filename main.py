@@ -13,7 +13,7 @@ app = Flask(__name__)
 API_KEY = os.getenv("BITGET_API_KEY")
 API_SECRET = os.getenv("BITGET_API_SECRET")
 API_PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
-BASE_URL = "https://api.bitget.com"  # URL REAL
+BASE_URL = "https://api.bitget.com"
 SYMBOL = "SOLUSDT"
 
 # 🚨 Verificación al iniciar
@@ -23,15 +23,14 @@ print("  BITGET_API_SECRET presente:", bool(API_SECRET))
 print("  BITGET_API_PASSPHRASE presente:", bool(API_PASSPHRASE))
 
 if not API_KEY or not API_SECRET or not API_PASSPHRASE:
-    raise Exception("❌ Faltan variables de entorno: BITGET_API_KEY, BITGET_API_SECRET o BITGET_API_PASSPHRASE")
+    raise Exception("❌ Faltan variables de entorno")
 
-# 🔏 Firma con base64 como exige Bitget
+# 🔏 Firma Bitget
 def auth_headers(method, endpoint, body=""):
     timestamp = str(int(time.time() * 1000))
     prehash = timestamp + method.upper() + endpoint + body
     sign = hmac.new(API_SECRET.encode(), prehash.encode(), hashlib.sha256).digest()
     signature = base64.b64encode(sign).decode()
-
     return {
         "ACCESS-KEY": API_KEY,
         "ACCESS-SIGN": signature,
@@ -61,10 +60,16 @@ def place_order(side):
 # ❌ Cierre inteligente
 def close_positions():
     try:
-        url = f"/api/v2/mix/position/single-position?symbol={SYMBOL}&marginCoin=USDT"
+        url = "/api/v2/mix/position/single-position"
         full_url = BASE_URL + url
-        headers = auth_headers("GET", url)
-        resp = requests.get(full_url, headers=headers)
+        body = {
+            "symbol": SYMBOL,
+            "marginCoin": "USDT",
+            "productType": "USDT-FUTURES"
+        }
+        json_body = json.dumps(body)
+        headers = auth_headers("POST", url, json_body)
+        resp = requests.post(full_url, headers=headers, data=json_body)
         data = resp.json()
         print(f"📊 Posición actual:", data)
 
@@ -127,7 +132,7 @@ def webhook():
 
     return "OK", 200
 
-# 🟢 Ejecutar localmente (no usado en Render)
+# 🟢 Ejecutar localmente
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
 
