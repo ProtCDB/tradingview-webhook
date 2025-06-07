@@ -9,14 +9,16 @@ from flask import Flask, request
 
 app = Flask(__name__)
 
-# 🔐 Cargar claves desde entorno
+# 🔐 Variables de entorno
 API_KEY = os.getenv("BITGET_API_KEY")
 API_SECRET = os.getenv("BITGET_API_SECRET")
 API_PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
 BASE_URL = "https://api.bitget.com"
 SYMBOL = "SOLUSDT"
+MARGIN_COIN = "USDT"
+PRODUCT_TYPE = "USDT-FUTURES"
 
-# 🚨 Verificación de claves
+# 🚨 Verificación inicial
 print("🔐 Verificación de entorno:")
 print("  BITGET_API_KEY presente:", bool(API_KEY))
 print("  BITGET_API_SECRET presente:", bool(API_SECRET))
@@ -25,13 +27,12 @@ print("  BITGET_API_PASSPHRASE presente:", bool(API_PASSPHRASE))
 if not API_KEY or not API_SECRET or not API_PASSPHRASE:
     raise Exception("❌ Faltan variables de entorno: BITGET_API_KEY, BITGET_API_SECRET o BITGET_API_PASSPHRASE")
 
-# 🔏 Firmar la solicitud con base64 como exige Bitget
+# 🔏 Firma HMAC-SHA256 con base64
 def auth_headers(method, endpoint, body=""):
     timestamp = str(int(time.time() * 1000))
     prehash = timestamp + method.upper() + endpoint + body
     sign = hmac.new(API_SECRET.encode(), prehash.encode(), hashlib.sha256).digest()
     signature = base64.b64encode(sign).decode()
-
     return {
         "ACCESS-KEY": API_KEY,
         "ACCESS-SIGN": signature,
@@ -40,44 +41,47 @@ def auth_headers(method, endpoint, body=""):
         "Content-Type": "application/json"
     }
 
-# ✅ Colocar orden de entrada
+# ✅ Orden de entrada
 def place_order(side):
     url = "/api/v2/mix/order/place-order"
-    full_url = BASE_URL + url
     body = {
         "symbol": SYMBOL,
-        "marginCoin": "USDT",
+        "marginCoin": MARGIN_COIN,
         "side": side,
         "orderType": "market",
         "size": "1",
         "timeInForceValue": "normal",
-        "productType": "USDT-FUTURES"
+        "productType": PRODUCT_TYPE
     }
     json_body = json.dumps(body)
     headers = auth_headers("POST", url, json_body)
-    resp = requests.post(full_url, headers=headers, data=json_body)
+    resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
     print(f"📥 {side} → {resp.status_code}, {resp.text}")
 
 # ❌ Cierre inteligente
 def close_positions():
     try:
-        endpoint = "/api/v2/mix/position/single-position"
-        query = f"symbol={SYMBOL}&marginCoin=USDT"
-        url = f"{endpoint}?{query}"
-        full_url = BASE_URL + url
-
-        headers = auth_headers("GET", url, "")
-        resp = requests.get(full_url, headers=headers)
+        endpoint = f"/api/v2/mix/position/single-position"
+        params = f"?symbol={SYMBOL}&marginCoin={MARGIN_COIN}"
+        url = endpoint + params
+        headers = auth_headers("GET", url)
+        resp = requests.get(BASE_URL + url, headers=headers)
         data = resp.json()
-        print(f"📊 Posición actual:", data)
+        
+        print(f"📊 Respuesta de Bitget:\n{json.dumps(data, indent=2)}")
+
+        if data.get("code") != "00000":
+            print(f"❌ Error en API Bitget: {data.get('msg')} (code: {data.get('code')})")
+            return
 
         position = data.get("data")
         if not position:
-            print("❌ No se pudo obtener la posición actual.")
+            print("✅ No hay posiciones abiertas.")
             return
 
         long_pos = float(position.get("long", {}).get("available", 0))
         short_pos = float(position.get("short", {}).get("available", 0))
+        print(f"📈 Posiciones actuales → LONG: {long_pos}, SHORT: {short_pos}")
 
         if long_pos > 0:
             print("🔴 Cerrando posición LONG...")
@@ -90,23 +94,23 @@ def close_positions():
     except Exception as e:
         print("❌ Error en close_positions:", str(e))
 
+# 📤 Orden de cierre
 def place_close_order(side, size):
     try:
         url = "/api/v2/mix/order/place-order"
-        full_url = BASE_URL + url
         body = {
             "symbol": SYMBOL,
-            "marginCoin": "USDT",
+            "marginCoin": MARGIN_COIN,
             "side": side,
             "orderType": "market",
             "size": str(size),
             "timeInForceValue": "normal",
             "orderDirection": "close_long" if side == "SELL" else "close_short",
-            "productType": "USDT-FUTURES"
+            "productType": PRODUCT_TYPE
         }
         json_body = json.dumps(body)
         headers = auth_headers("POST", url, json_body)
-        resp = requests.post(full_url, headers=headers, data=json_body)
+        resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
         print(f"🔴 CLOSE_{side} → {resp.status_code}, {resp.text}")
     except Exception as e:
         print("❌ Error en place_close_order:", str(e))
@@ -130,6 +134,7 @@ def webhook():
 
     return "OK", 200
 
-# 🟢 Ejecutar localmente
+# 🟢 Local execution
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
+
