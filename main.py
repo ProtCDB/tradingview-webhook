@@ -3,6 +3,7 @@ import json
 import hmac
 import hashlib
 import time
+import base64
 import requests
 from flask import Flask, request
 
@@ -12,7 +13,7 @@ app = Flask(__name__)
 API_KEY = os.getenv("BITGET_API_KEY")
 API_SECRET = os.getenv("BITGET_API_SECRET")
 API_PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
-BASE_URL = "https://api.bitget.com"  # URL REAL de Bitget
+BASE_URL = "https://api.bitget.com"  # URL REAL
 SYMBOL = "SOLUSDT"
 
 # 🚨 Verificación al iniciar
@@ -24,11 +25,13 @@ print("  BITGET_API_PASSPHRASE presente:", bool(API_PASSPHRASE))
 if not API_KEY or not API_SECRET or not API_PASSPHRASE:
     raise Exception("❌ Faltan variables de entorno: BITGET_API_KEY, BITGET_API_SECRET o BITGET_API_PASSPHRASE")
 
-# 🔏 Función para firmar peticiones
+# 🔏 Firma con base64 como exige Bitget
 def auth_headers(method, endpoint, body=""):
     timestamp = str(int(time.time() * 1000))
-    prehash = timestamp + method + endpoint + body
-    signature = hmac.new(API_SECRET.encode(), prehash.encode(), hashlib.sha256).hexdigest()
+    prehash = timestamp + method.upper() + endpoint + body
+    sign = hmac.new(API_SECRET.encode(), prehash.encode(), hashlib.sha256).digest()
+    signature = base64.b64encode(sign).decode()
+
     return {
         "ACCESS-KEY": API_KEY,
         "ACCESS-SIGN": signature,
@@ -46,8 +49,7 @@ def place_order(side):
         "marginCoin": "USDT",
         "side": side,
         "orderType": "market",
-        "size": "1",  # Cambiar a tu tamaño de operación deseado
-        "price": "",
+        "size": "1",
         "timeInForceValue": "normal",
         "productType": "USDT-FUTURES"
     }
@@ -56,17 +58,21 @@ def place_order(side):
     resp = requests.post(full_url, headers=headers, data=json_body)
     print(f"📥 {side} → {resp.status_code}, {resp.text}")
 
-# ❌ Cierre inteligente: cierra long con SELL y short con BUY
+# ❌ Cierre inteligente
 def close_positions():
     try:
         url = f"/api/v2/mix/position/single-position?symbol={SYMBOL}&marginCoin=USDT"
         full_url = BASE_URL + url
-        headers = auth_headers("GET", f"/api/v2/mix/position/single-position?symbol={SYMBOL}&marginCoin=USDT")
+        headers = auth_headers("GET", url)
         resp = requests.get(full_url, headers=headers)
         data = resp.json()
         print(f"📊 Posición actual:", data)
 
-        position = data.get("data", {})
+        position = data.get("data")
+        if not position:
+            print("❌ No se pudo obtener la posición actual.")
+            return
+
         long_pos = float(position.get("long", {}).get("available", 0))
         short_pos = float(position.get("short", {}).get("available", 0))
 
@@ -91,7 +97,6 @@ def place_close_order(side, size):
             "side": side,
             "orderType": "market",
             "size": str(size),
-            "price": "",
             "timeInForceValue": "normal",
             "orderDirection": "close_long" if side == "SELL" else "close_short",
             "productType": "USDT-FUTURES"
@@ -103,7 +108,7 @@ def place_close_order(side, size):
     except Exception as e:
         print("❌ Error en place_close_order:", str(e))
 
-# 🌐 Ruta principal
+# 🌐 Webhook principal
 @app.route("/", methods=["POST"])
 def webhook():
     data = request.json
@@ -122,7 +127,7 @@ def webhook():
 
     return "OK", 200
 
-# 🟢 Lanzar app con gunicorn (Render lo hace por defecto)
+# 🟢 Ejecutar localmente (no usado en Render)
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
 
