@@ -9,35 +9,41 @@ from flask import Flask, request
 
 app = Flask(__name__)
 
-# 🔐 Cargar claves desde entorno
+# 🌍 Configuración inicial
 API_KEY = os.getenv("BITGET_API_KEY")
 API_SECRET = os.getenv("BITGET_API_SECRET")
 API_PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
 BASE_URL = "https://api.bitget.com"
-SYMBOL = "SOLUSDT"
 PRODUCT_TYPE = "USDT-FUTURES"
+SYMBOL_BASE = "SOL"  # Cambia a BTC, ETH, etc. según tu bot
 
-# 🔎 Verificar si el símbolo es válido en Bitget
-def is_symbol_valid(symbol):
+# 🛡️ Validación entorno
+if not API_KEY or not API_SECRET or not API_PASSPHRASE:
+    raise Exception("❌ Faltan claves de entorno.")
+
+# 🔍 Obtener el símbolo real desde la API de Bitget
+def get_real_symbol(symbol_base):
     try:
         resp = requests.get(
             f"{BASE_URL}/api/v2/mix/market/contracts",
             params={"productType": PRODUCT_TYPE}
         )
         contracts = resp.json().get("data", [])
-        valid_symbols = [c["symbol"] for c in contracts]
-        return symbol in valid_symbols
+        for c in contracts:
+            if c["baseCoin"] == symbol_base and c["quoteCoin"] == "USDT":
+                print(f"✅ Símbolo real encontrado: {c['symbol']}")
+                return c["symbol"]
+        print(f"⚠️ No se encontró símbolo para {symbol_base}USDT")
+        return None
     except Exception as e:
-        print("⚠️ Error verificando símbolo:", str(e))
-        return False
+        print("❌ Error obteniendo símbolo:", str(e))
+        return None
 
-if not API_KEY or not API_SECRET or not API_PASSPHRASE:
-    raise Exception("❌ Faltan claves de entorno.")
+SYMBOL = get_real_symbol(SYMBOL_BASE)
+if not SYMBOL:
+    raise Exception(f"❌ No se pudo obtener un símbolo válido para {SYMBOL_BASE}")
 
-if not is_symbol_valid(SYMBOL):
-    raise Exception(f"❌ Símbolo no válido para {PRODUCT_TYPE}: {SYMBOL}")
-
-# 🔏 Firma según Bitget (base64 HMAC-SHA256)
+# 🔏 Firma para autenticación
 def auth_headers(method, endpoint, body=""):
     timestamp = str(int(time.time() * 1000))
     prehash = timestamp + method.upper() + endpoint + body
@@ -72,7 +78,7 @@ def place_order(side):
 def close_positions():
     print("🔄 Señal de cierre recibida.")
     url = f"/api/v2/mix/position/single-position?symbol={SYMBOL}&marginCoin=USDT"
-    headers = auth_headers("GET", f"/api/v2/mix/position/single-position?symbol={SYMBOL}&marginCoin=USDT")
+    headers = auth_headers("GET", url)
     resp = requests.get(BASE_URL + url, headers=headers)
     print("📊 Respuesta de posición:", resp.json())
 
@@ -136,4 +142,3 @@ def webhook():
 # 🟢 Local debug
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
-
