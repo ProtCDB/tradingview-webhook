@@ -8,48 +8,49 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-BASE_URL = "https://api.bitget.com" # Usa https://api.bitget.com para real
+# === Variables de entorno ===
+API_KEY = os.getenv("BITGET_API_KEY")
+API_SECRET = os.getenv("BITGET_API_SECRET")
+PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
+
+# === DEBUG de entorno ===
+print("🔐 Verificación de entorno:")
+print("  BITGET_API_KEY presente:", bool(API_KEY))
+print("  BITGET_API_SECRET presente:", bool(API_SECRET))
+print("  BITGET_API_PASSPHRASE presente:", bool(PASSPHRASE))
+
+# Validación
+if not API_KEY or not API_SECRET or not PASSPHRASE:
+    raise Exception("❌ Faltan variables de entorno: BITGET_API_KEY, BITGET_API_SECRET o BITGET_API_PASSPHRASE")
+
+# === Configuración ===
+BASE_URL = "https://api.bitget.com"  # URL REAL para entorno de producción
 SYMBOL = "SOLUSDT"
-MARGIN_RATIO = 0.01
+MARGIN_RATIO = 0.01  # 1% del balance disponible
 
-# === Obtener credenciales desde variables de entorno (con impresión segura) ===
-def get_api_credentials():
-    API_KEY = os.getenv("BITGET_API_KEY")
-    API_SECRET = os.getenv("BITGET_API_SECRET")
-    PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
-
-    print("🔐 Verificación de entorno:")
-    print(f"  BITGET_API_KEY presente: {bool(API_KEY)}")
-    print(f"  BITGET_API_SECRET presente: {bool(API_SECRET)}")
-    print(f"  BITGET_API_PASSPHRASE presente: {bool(PASSPHRASE)}")
-
-    if not API_KEY or not API_SECRET or not PASSPHRASE:
-        raise Exception("❌ Faltan variables de entorno: BITGET_API_KEY, BITGET_API_SECRET o BITGET_API_PASSPHRASE")
-
-    return API_KEY, API_SECRET, PASSPHRASE
+HEADERS = {
+    "ACCESS-KEY": API_KEY,
+    "ACCESS-PASSPHRASE": PASSPHRASE,
+    "Content-Type": "application/json"
+}
 
 # === Timestamp ===
 def get_timestamp():
     return str(int(time.time() * 1000))
 
 # === Firma HMAC ===
-def sign(message: str, secret: str):
-    return hmac.new(secret.encode(), message.encode(), hashlib.sha256).hexdigest()
+def sign(message: str):
+    return hmac.new(API_SECRET.encode(), message.encode(), hashlib.sha256).hexdigest()
 
-# === Autenticación ===
+# === Headers con firma ===
 def auth_headers(method, path, body=""):
-    API_KEY, API_SECRET, PASSPHRASE = get_api_credentials()
     timestamp = get_timestamp()
     prehash = f"{timestamp}{method}{path}{body}"
-    signature = sign(prehash, API_SECRET)
-
-    return {
-        "ACCESS-KEY": API_KEY,
-        "ACCESS-PASSPHRASE": PASSPHRASE,
-        "ACCESS-SIGN": signature,
-        "ACCESS-TIMESTAMP": timestamp,
-        "Content-Type": "application/json"
-    }
+    signature = sign(prehash)
+    headers = HEADERS.copy()
+    headers["ACCESS-SIGN"] = signature
+    headers["ACCESS-TIMESTAMP"] = timestamp
+    return headers
 
 # === Obtener balance USDT disponible ===
 def get_balance():
@@ -64,21 +65,20 @@ def get_balance():
             return float(asset["available"])
     return 0.0
 
-# === Obtener precio de mercado ===
+# === Precio de mercado ===
 def get_market_price():
     url = f"/api/v2/mix/market/ticker?symbol={SYMBOL}"
     full_url = BASE_URL + url
     resp = requests.get(full_url)
-    print("💰 Precio de mercado:", resp.json())
     return float(resp.json()["data"]["last"])
 
-# === Calcular tamaño de orden ===
+# === Tamaño de orden ===
 def get_order_size(price):
     balance = get_balance()
     amount = balance * MARGIN_RATIO
     return round(amount / price, 3)
 
-# === Ejecutar orden ===
+# === Crear orden ===
 def place_order(side):
     try:
         market_price = get_market_price()
@@ -105,38 +105,66 @@ def place_order(side):
     except Exception as e:
         print("❌ Error en place_order:", str(e))
 
-# === Cerrar posiciones ===
+# === Cerrar posiciones correctamente ===
 def close_positions():
     try:
-        url = "/api/v2/mix/position/close-position"
+        # Obtener datos de posición actual
+        url = f"/api/v2/mix/position/single-position?symbol={SYMBOL}&marginCoin=USDT"
+        full_url = BASE_URL + url
+        headers = auth_headers("GET", url)
+        resp = requests.get(full_url, headers=headers)
+        position_data = resp.json()
+        print("📦 Posición actual:", position_data)
+
+        if not position_data.get("data"):
+            print("⚠️ No hay posición abierta.")
+            return
+
+        pos = position_data["data"]
+        side = pos["holdSide"]  # "long" o "short"
+        size = float(pos["total"])
+
+        if size == 0:
+            print("✅ No hay posición abierta.")
+            return
+
+        close_side = "SELL" if side == "long" else "BUY"
+        direction = "close_long" if side == "long" else "close_short"
+
+        url = "/api/v2/mix/order/place-order"
         full_url = BASE_URL + url
         body = {
             "symbol": SYMBOL,
-            "marginCoin": "USDT"
+            "marginCoin": "USDT",
+            "side": close_side,
+            "orderType": "market",
+            "size": str(size),
+            "price": "",
+            "timeInForceValue": "normal",
+            "orderDirection": direction,
+            "productType": "USDT-FUTURES"
         }
         json_body = json.dumps(body)
         headers = auth_headers("POST", url, json_body)
         resp = requests.post(full_url, headers=headers, data=json_body)
-        print(f"🔴 CIERRE FORZADO: {resp.status_code}, {resp.text}")
+        print(f"🔴 ORDEN DE CIERRE ENVIADA: {resp.status_code}, {resp.text}")
+
     except Exception as e:
         print("❌ Error en close_positions:", str(e))
 
-# === Endpoint keep-alive ===
+# === Keep-alive ===
 @app.route("/", methods=["GET", "HEAD"])
 def index():
     return "✅ Webhook activo", 200
 
-# === Webhook principal ===
+# === Webhook ===
 @app.route("/", methods=["POST"])
 def webhook():
     try:
         data = request.get_json(force=True)
         print("📨 Payload recibido:", data)
 
-        if not data or "signal" not in data:
-            return jsonify({"error": "No se recibió 'signal' en el JSON"}), 400
-
-        signal = data["signal"]
+        signal = data.get("signal")
 
         if signal == "ENTRY_LONG":
             place_order("BUY")
@@ -148,7 +176,10 @@ def webhook():
             print("⚠️ Señal no reconocida:", signal)
 
         return jsonify({"status": "ok"})
-
     except Exception as e:
         print(f"⚠️ Error general en webhook: {e}")
         return jsonify({"error": str(e)}), 400
+
+# === Ejecutar localmente ===
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
