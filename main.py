@@ -8,7 +8,7 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-BASE_URL = "https://api-demo.bitget.com"  # Usa https://api.bitget.com para real
+https://api.bitget.com # Usa https://api.bitget.com para real
 SYMBOL = "SOLUSDT"
 MARGIN_RATIO = 0.01
 
