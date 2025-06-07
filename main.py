@@ -15,6 +15,7 @@ API_SECRET = os.getenv("BITGET_API_SECRET")
 API_PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
 BASE_URL = "https://api.bitget.com"
 SYMBOL = "SOLUSDT"
+PRODUCT_TYPE = "USDT-FUTURES"
 
 # 🚨 Verificación al iniciar
 print("🔐 Verificación de entorno:")
@@ -23,14 +24,15 @@ print("  BITGET_API_SECRET presente:", bool(API_SECRET))
 print("  BITGET_API_PASSPHRASE presente:", bool(API_PASSPHRASE))
 
 if not API_KEY or not API_SECRET or not API_PASSPHRASE:
-    raise Exception("❌ Faltan variables de entorno")
+    raise Exception("❌ Faltan variables de entorno: BITGET_API_KEY, BITGET_API_SECRET o BITGET_API_PASSPHRASE")
 
-# 🔏 Firma Bitget
+# 🔏 Función para firmar peticiones
 def auth_headers(method, endpoint, body=""):
     timestamp = str(int(time.time() * 1000))
     prehash = timestamp + method.upper() + endpoint + body
     sign = hmac.new(API_SECRET.encode(), prehash.encode(), hashlib.sha256).digest()
     signature = base64.b64encode(sign).decode()
+
     return {
         "ACCESS-KEY": API_KEY,
         "ACCESS-SIGN": signature,
@@ -50,14 +52,14 @@ def place_order(side):
         "orderType": "market",
         "size": "1",
         "timeInForceValue": "normal",
-        "productType": "USDT-FUTURES"
+        "productType": PRODUCT_TYPE
     }
-    json_body = json.dumps(body)
+    json_body = json.dumps(body, separators=(",", ":"))
     headers = auth_headers("POST", url, json_body)
     resp = requests.post(full_url, headers=headers, data=json_body)
     print(f"📥 {side} → {resp.status_code}, {resp.text}")
 
-# ❌ Cierre inteligente
+# ❌ Cierre de posiciones existentes
 def close_positions():
     try:
         url = "/api/v2/mix/position/single-position"
@@ -65,13 +67,13 @@ def close_positions():
         body = {
             "symbol": SYMBOL,
             "marginCoin": "USDT",
-            "productType": "USDT-FUTURES"
+            "productType": PRODUCT_TYPE
         }
-        json_body = json.dumps(body)
+        json_body = json.dumps(body, separators=(",", ":"))
         headers = auth_headers("POST", url, json_body)
         resp = requests.post(full_url, headers=headers, data=json_body)
         data = resp.json()
-        print(f"📊 Posición actual:", data)
+        print("📊 Posición actual:", data)
 
         position = data.get("data")
         if not position:
@@ -92,6 +94,7 @@ def close_positions():
     except Exception as e:
         print("❌ Error en close_positions:", str(e))
 
+# 🧨 Cerrar orden con dirección correcta
 def place_close_order(side, size):
     try:
         url = "/api/v2/mix/order/place-order"
@@ -104,9 +107,9 @@ def place_close_order(side, size):
             "size": str(size),
             "timeInForceValue": "normal",
             "orderDirection": "close_long" if side == "SELL" else "close_short",
-            "productType": "USDT-FUTURES"
+            "productType": PRODUCT_TYPE
         }
-        json_body = json.dumps(body)
+        json_body = json.dumps(body, separators=(",", ":"))
         headers = auth_headers("POST", url, json_body)
         resp = requests.post(full_url, headers=headers, data=json_body)
         print(f"🔴 CLOSE_{side} → {resp.status_code}, {resp.text}")
@@ -132,8 +135,7 @@ def webhook():
 
     return "OK", 200
 
-# 🟢 Ejecutar localmente
+# 🟢 Ejecutar en local (no usado en Render)
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
-
 
