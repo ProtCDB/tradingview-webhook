@@ -9,26 +9,34 @@ from flask import Flask, request
 
 app = Flask(__name__)
 
-# 🔐 Claves de entorno
+# 🔐 Cargar claves desde entorno
 API_KEY = os.getenv("BITGET_API_KEY")
 API_SECRET = os.getenv("BITGET_API_SECRET")
 API_PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
+
 BASE_URL = "https://api.bitget.com"
 PRODUCT_TYPE = "USDT-FUTURES"
 MARGIN_COIN = "USDT"
 
-# 🔎 Verificar símbolo válido
+# ✅ Verificar símbolo
 def is_symbol_valid(symbol):
     try:
-        resp = requests.get(f"{BASE_URL}/api/v2/mix/market/contracts", params={"productType": PRODUCT_TYPE})
+        resp = requests.get(
+            f"{BASE_URL}/api/v2/mix/market/contracts",
+            params={"productType": PRODUCT_TYPE}
+        )
         contracts = resp.json().get("data", [])
         valid_symbols = [c["symbol"] for c in contracts]
-        return symbol in valid_symbols
+        if symbol in valid_symbols:
+            print(f"✅ Símbolo real encontrado: {symbol}")
+            return True
+        print(f"❌ Símbolo inválido: {symbol}")
+        return False
     except Exception as e:
         print("⚠️ Error verificando símbolo:", str(e))
         return False
 
-# 🔐 Headers firmados
+# 🔏 Autenticación de cabeceras
 def auth_headers(method, endpoint, body=""):
     timestamp = str(int(time.time() * 1000))
     prehash = timestamp + method.upper() + endpoint + body
@@ -42,7 +50,7 @@ def auth_headers(method, endpoint, body=""):
         "Content-Type": "application/json"
     }
 
-# ✅ Crear orden de entrada
+# 🚀 Crear orden de entrada
 def place_order(symbol, side):
     url = "/api/v2/mix/order/place-order"
     body = {
@@ -54,35 +62,15 @@ def place_order(symbol, side):
         "timeInForceValue": "normal",
         "productType": PRODUCT_TYPE,
         "marginMode": "crossed",
-        "reduceOnly": False,
         "positionMode": "single"
+        # NOTA: NO incluir reduceOnly
     }
     json_body = json.dumps(body)
     headers = auth_headers("POST", url, json_body)
     resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
     print(f"🟢 ORDEN {side} → {resp.status_code}, {resp.text}")
 
-# 🔻 Orden de salida (cerrar)
-def place_close_order(symbol, side, size):
-    url = "/api/v2/mix/order/place-order"
-    body = {
-        "symbol": symbol,
-        "marginCoin": MARGIN_COIN,
-        "side": side,
-        "orderType": "market",
-        "size": str(size),
-        "timeInForceValue": "normal",
-        "productType": PRODUCT_TYPE,
-        "marginMode": "crossed",
-        "reduceOnly": True,
-        "positionMode": "single"
-    }
-    json_body = json.dumps(body)
-    headers = auth_headers("POST", url, json_body)
-    resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
-    print(f"🔴 ORDEN CIERRE {side} → {resp.status_code}, {resp.text}")
-
-# ❌ Cerrar posiciones
+# ❌ Cerrar posiciones abiertas
 def close_positions(symbol):
     print("🔄 Señal de cierre recibida.")
     url = f"/api/v2/mix/position/single-position?symbol={symbol}&marginCoin={MARGIN_COIN}"
@@ -109,19 +97,37 @@ def close_positions(symbol):
     except Exception as e:
         print("❌ Error al interpretar posición:", str(e))
 
+# 🧨 Orden de cierre
+def place_close_order(symbol, side, size):
+    url = "/api/v2/mix/order/place-order"
+    body = {
+        "symbol": symbol,
+        "marginCoin": MARGIN_COIN,
+        "side": side,
+        "orderType": "market",
+        "size": str(size),
+        "timeInForceValue": "normal",
+        "productType": PRODUCT_TYPE,
+        "marginMode": "crossed",
+        "positionMode": "single",
+        "reduceOnly": True
+    }
+    json_body = json.dumps(body)
+    headers = auth_headers("POST", url, json_body)
+    resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
+    print(f"🔴 ORDEN CIERRE {side} → {resp.status_code}, {resp.text}")
+
 # 🌐 Webhook
 @app.route("/", methods=["POST"])
 def webhook():
     data = request.json
     print("📨 Payload recibido:", data)
+
     signal = data.get("signal")
     symbol = data.get("symbol", "SOLUSDT").upper()
 
     if not is_symbol_valid(symbol):
-        print(f"❌ Símbolo no válido: {symbol}")
-        return "Invalid symbol", 400
-
-    print(f"✅ Símbolo real encontrado: {symbol}")
+        return "Símbolo inválido", 400
 
     if signal == "ENTRY_LONG":
         print("🚀 Entrada LONG")
@@ -136,8 +142,6 @@ def webhook():
 
     return "OK", 200
 
-# ▶️ Run local
+# 🟢 Debug local
 if __name__ == "__main__":
-    if not API_KEY or not API_SECRET or not API_PASSPHRASE:
-        raise Exception("❌ Faltan claves de entorno.")
     app.run(host="0.0.0.0", port=10000)
