@@ -16,7 +16,7 @@ API_PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
 BASE_URL = "https://api.bitget.com"
 PRODUCT_TYPE = "USDT-FUTURES"
 MARGIN_COIN = "USDT"
-MARGIN_MODE = "cross"  # o "isolated" si trabajas en ese modo
+MARGIN_MODE = "crossed"  # o "isolated" si trabajas en ese modo
 
 # 🔎 Detectar símbolo real (ej: SOLUSDT → SOLUSDT_UMCBL)
 def get_real_symbol(symbol):
