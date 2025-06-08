@@ -64,39 +64,41 @@ def place_order(symbol, side, size="1", reduce_only=False):
     resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
     print(f"{'🔴' if reduce_only else '🟢'} ORDEN {side} → {resp.status_code}, {resp.text}")
 
-# 🔄 Cerrar posiciones abiertas
+# 🔄 Cerrar posiciones abiertas usando misma lógica que entrada
 def close_positions(symbol):
     print("🔄 Señal de cierre recibida.")
+
     url = f"/api/v2/mix/position/single-position?symbol={symbol}&marginCoin={MARGIN_COIN}"
     headers = auth_headers("GET", f"/api/v2/mix/position/single-position?symbol={symbol}&marginCoin={MARGIN_COIN}")
     resp = requests.get(BASE_URL + url, headers=headers)
     print("📊 Respuesta de posición:", resp.json())
 
-    data = resp.json()
-    position = data.get("data")
-    if not position:
+    data = resp.json().get("data", {})
+    if not data:
         print("⚠️ No hay posición abierta para cerrar.")
         return
 
     try:
-        long_pos = float(position.get("long", {}).get("available", 0))
-        short_pos = float(position.get("short", {}).get("available", 0))
+        long_pos = float(data.get("long", {}).get("available", 0))
+        short_pos = float(data.get("short", {}).get("available", 0))
 
         if long_pos > 0:
-            print("🔴 Cerrando LONG...")
+            print(f"🔴 Cerrando posición LONG: {long_pos}")
             place_order(symbol, "SELL", size=long_pos, reduce_only=True)
+
         if short_pos > 0:
-            print("🔴 Cerrando SHORT...")
+            print(f"🔴 Cerrando posición SHORT: {short_pos}")
             place_order(symbol, "BUY", size=short_pos, reduce_only=True)
+
     except Exception as e:
-        print("❌ Error interpretando posición:", str(e))
+        print("❌ Error interpretando datos de posición:", str(e))
 
 # 🌐 Webhook
 @app.route("/", methods=["POST"])
 def webhook():
     data = request.json
     print("📨 Payload recibido:", data)
-    signal = data.get("signal", "").upper()
+    signal = data.get("signal")
     raw_symbol = data.get("symbol", "").upper()
 
     real_symbol = get_valid_symbol(raw_symbol)
@@ -106,25 +108,14 @@ def webhook():
 
     print(f"✅ Símbolo real encontrado: {real_symbol}")
 
-    # ENTRADAS
     if signal == "ENTRY_LONG":
         print("🚀 Entrada LONG")
         place_order(real_symbol, "BUY")
     elif signal == "ENTRY_SHORT":
         print("📉 Entrada SHORT")
         place_order(real_symbol, "SELL")
-
-    # SALIDAS → reduce_only = True
-    elif signal in ["EXIT_LONG_SL", "EXIT_LONG_TP"]:
-        print("🛑 Salida LONG")
-        place_order(real_symbol, "SELL", reduce_only=True)
-    elif signal in ["EXIT_SHORT_SL", "EXIT_SHORT_TP"]:
-        print("🛑 Salida SHORT")
-        place_order(real_symbol, "BUY", reduce_only=True)
-
-    elif signal == "EXIT_CONFIRMED":
+    elif signal and signal.startswith("EXIT"):
         close_positions(real_symbol)
-
     else:
         print("⚠️ Señal desconocida:", signal)
 
