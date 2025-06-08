@@ -9,34 +9,27 @@ from flask import Flask, request
 
 app = Flask(__name__)
 
-# 🔐 Cargar claves desde entorno
 API_KEY = os.getenv("BITGET_API_KEY")
 API_SECRET = os.getenv("BITGET_API_SECRET")
 API_PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
-
 BASE_URL = "https://api.bitget.com"
 PRODUCT_TYPE = "USDT-FUTURES"
 MARGIN_COIN = "USDT"
 
-# ✅ Verificar símbolo
-def is_symbol_valid(symbol):
+# ✅ Verificar símbolo válido
+def get_valid_symbol(input_symbol):
     try:
-        resp = requests.get(
-            f"{BASE_URL}/api/v2/mix/market/contracts",
-            params={"productType": PRODUCT_TYPE}
-        )
+        url = f"{BASE_URL}/api/v2/mix/market/contracts"
+        resp = requests.get(url, params={"productType": PRODUCT_TYPE})
         contracts = resp.json().get("data", [])
-        valid_symbols = [c["symbol"] for c in contracts]
-        if symbol in valid_symbols:
-            print(f"✅ Símbolo real encontrado: {symbol}")
-            return True
-        print(f"❌ Símbolo inválido: {symbol}")
-        return False
+        for c in contracts:
+            if c["symbol"].startswith(input_symbol):
+                return c["symbol"]
     except Exception as e:
-        print("⚠️ Error verificando símbolo:", str(e))
-        return False
+        print("❌ Error obteniendo contratos:", str(e))
+    return None
 
-# 🔏 Autenticación de cabeceras
+# 🔐 Headers de autenticación
 def auth_headers(method, endpoint, body=""):
     timestamp = str(int(time.time() * 1000))
     prehash = timestamp + method.upper() + endpoint + body
@@ -50,7 +43,7 @@ def auth_headers(method, endpoint, body=""):
         "Content-Type": "application/json"
     }
 
-# 🚀 Crear orden de entrada
+# ✅ Crear orden de entrada
 def place_order(symbol, side):
     url = "/api/v2/mix/order/place-order"
     body = {
@@ -61,16 +54,14 @@ def place_order(symbol, side):
         "size": "1",
         "timeInForceValue": "normal",
         "productType": PRODUCT_TYPE,
-        "marginMode": "crossed",
-        "positionMode": "single"
-        # NOTA: NO incluir reduceOnly
+        "marginMode": "crossed"
     }
     json_body = json.dumps(body)
     headers = auth_headers("POST", url, json_body)
     resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
     print(f"🟢 ORDEN {side} → {resp.status_code}, {resp.text}")
 
-# ❌ Cerrar posiciones abiertas
+# ❌ Cerrar posiciones
 def close_positions(symbol):
     print("🔄 Señal de cierre recibida.")
     url = f"/api/v2/mix/position/single-position?symbol={symbol}&marginCoin={MARGIN_COIN}"
@@ -95,7 +86,7 @@ def close_positions(symbol):
             print("🔴 Cerrando SHORT...")
             place_close_order(symbol, "BUY", short_pos)
     except Exception as e:
-        print("❌ Error al interpretar posición:", str(e))
+        print("❌ Error interpretando posición:", str(e))
 
 # 🧨 Orden de cierre
 def place_close_order(symbol, side, size):
@@ -109,7 +100,6 @@ def place_close_order(symbol, side, size):
         "timeInForceValue": "normal",
         "productType": PRODUCT_TYPE,
         "marginMode": "crossed",
-        "positionMode": "single",
         "reduceOnly": True
     }
     json_body = json.dumps(body)
@@ -122,26 +112,29 @@ def place_close_order(symbol, side, size):
 def webhook():
     data = request.json
     print("📨 Payload recibido:", data)
-
     signal = data.get("signal")
-    symbol = data.get("symbol", "SOLUSDT").upper()
+    raw_symbol = data.get("symbol", "").upper()
 
-    if not is_symbol_valid(symbol):
-        return "Símbolo inválido", 400
+    real_symbol = get_valid_symbol(raw_symbol)
+    if not real_symbol:
+        print(f"❌ Símbolo no válido: {raw_symbol}")
+        return "Invalid symbol", 400
+
+    print(f"✅ Símbolo real encontrado: {real_symbol}")
 
     if signal == "ENTRY_LONG":
         print("🚀 Entrada LONG")
-        place_order(symbol, "BUY")
+        place_order(real_symbol, "BUY")
     elif signal == "ENTRY_SHORT":
         print("📉 Entrada SHORT")
-        place_order(symbol, "SELL")
+        place_order(real_symbol, "SELL")
     elif signal and signal.startswith("EXIT"):
-        close_positions(symbol)
+        close_positions(real_symbol)
     else:
         print("⚠️ Señal desconocida:", signal)
 
     return "OK", 200
 
-# 🟢 Debug local
+# 🟢 Local debug
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
