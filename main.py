@@ -9,32 +9,34 @@ from flask import Flask, request
 
 app = Flask(__name__)
 
-# 🔐 Claves desde variables de entorno
+# 🔐 Cargar claves desde entorno
 API_KEY = os.getenv("BITGET_API_KEY")
 API_SECRET = os.getenv("BITGET_API_SECRET")
 API_PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
 BASE_URL = "https://api.bitget.com"
 PRODUCT_TYPE = "USDT-FUTURES"
 MARGIN_COIN = "USDT"
+MARGIN_MODE = "cross"  # o "isolated" si trabajas en ese modo
 
-if not API_KEY or not API_SECRET or not API_PASSPHRASE:
-    raise Exception("❌ Faltan claves de entorno.")
-
-# 🔍 Obtener símbolo real desde Bitget
-def get_real_symbol(symbol_raw):
+# 🔎 Detectar símbolo real (ej: SOLUSDT → SOLUSDT_UMCBL)
+def get_real_symbol(symbol):
     try:
-        resp = requests.get(f"{BASE_URL}/api/v2/mix/market/contracts", params={"productType": PRODUCT_TYPE})
+        resp = requests.get(
+            f"{BASE_URL}/api/v2/mix/market/contracts",
+            params={"productType": PRODUCT_TYPE}
+        )
         contracts = resp.json().get("data", [])
         for c in contracts:
-            if c["baseCoin"] + c["quoteCoin"] == symbol_raw:
+            if c["symbol"].startswith(symbol):
                 print(f"✅ Símbolo real encontrado: {c['symbol']}")
                 return c["symbol"]
-        print("❌ No se encontró símbolo real para:", symbol_raw)
+        print("❌ Símbolo no válido.")
+        return None
     except Exception as e:
-        print("❌ Error al obtener contratos:", str(e))
-    return None
+        print("⚠️ Error buscando símbolo:", str(e))
+        return None
 
-# 🔏 Autenticación Bitget
+# 🔏 Firma de autenticación
 def auth_headers(method, endpoint, body=""):
     timestamp = str(int(time.time() * 1000))
     prehash = timestamp + method.upper() + endpoint + body
@@ -54,6 +56,7 @@ def place_order(side, symbol):
     body = {
         "symbol": symbol,
         "marginCoin": MARGIN_COIN,
+        "marginMode": MARGIN_MODE,
         "side": side,
         "orderType": "market",
         "size": "1",
@@ -65,12 +68,31 @@ def place_order(side, symbol):
     resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
     print(f"🟢 ORDEN {side} → {resp.status_code}, {resp.text}")
 
-# ❌ Cerrar posiciones abiertas
+# 🧨 Orden de cierre
+def place_close_order(side, size, symbol):
+    url = "/api/v2/mix/order/place-order"
+    body = {
+        "symbol": symbol,
+        "marginCoin": MARGIN_COIN,
+        "marginMode": MARGIN_MODE,
+        "side": side,
+        "orderType": "market",
+        "size": str(size),
+        "timeInForceValue": "normal",
+        "orderDirection": "close_long" if side == "SELL" else "close_short",
+        "productType": PRODUCT_TYPE
+    }
+    json_body = json.dumps(body)
+    headers = auth_headers("POST", url, json_body)
+    resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
+    print(f"🔴 ORDEN CIERRE {side} → {resp.status_code}, {resp.text}")
+
+# ❌ Cerrar posiciones
 def close_positions(symbol):
     print("🔄 Señal de cierre recibida.")
-    endpoint = f"/api/v2/mix/position/single-position?symbol={symbol}&marginCoin={MARGIN_COIN}"
-    headers = auth_headers("GET", endpoint)
-    resp = requests.get(BASE_URL + endpoint, headers=headers)
+    url = f"/api/v2/mix/position/single-position?symbol={symbol}&marginCoin={MARGIN_COIN}"
+    headers = auth_headers("GET", url)
+    resp = requests.get(BASE_URL + url, headers=headers)
     print("📊 Respuesta de posición:", resp.json())
 
     data = resp.json()
@@ -92,33 +114,18 @@ def close_positions(symbol):
     except Exception as e:
         print("❌ Error al interpretar posición:", str(e))
 
-# 🧨 Orden de cierre
-def place_close_order(side, size, symbol):
-    url = "/api/v2/mix/order/place-order"
-    body = {
-        "symbol": symbol,
-        "marginCoin": MARGIN_COIN,
-        "side": side,
-        "orderType": "market",
-        "size": str(size),
-        "timeInForceValue": "normal",
-        "orderDirection": "close_long" if side == "SELL" else "close_short",
-        "productType": PRODUCT_TYPE
-    }
-    json_body = json.dumps(body)
-    headers = auth_headers("POST", url, json_body)
-    resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
-    print(f"🔴 ORDEN CIERRE {side} → {resp.status_code}, {resp.text}")
-
-# 🌐 Ruta webhook principal
+# 🌐 Ruta principal del webhook
 @app.route("/", methods=["POST"])
 def webhook():
     data = request.json
     print("📨 Payload recibido:", data)
-
     signal = data.get("signal")
-    symbol_raw = data.get("symbol", "SOLUSDT")
-    symbol = get_real_symbol(symbol_raw)
+    base_symbol = data.get("symbol")
+
+    if not base_symbol:
+        return "❌ Símbolo no proporcionado", 400
+
+    symbol = get_real_symbol(base_symbol)
     if not symbol:
         return "❌ Símbolo no encontrado", 400
 
@@ -135,6 +142,7 @@ def webhook():
 
     return "OK", 200
 
-# 🟢 Ejecutar app localmente
+# 🟢 Ejecución local
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
+
