@@ -1,100 +1,115 @@
 from flask import Flask, request, jsonify
+import hmac
+import hashlib
+import base64
+import time
 import requests
+import json
 import uuid
+import os
 
 app = Flask(__name__)
 
-# Configuración de la API de Bitget
-API_KEY = 'TU_API_KEY'
-API_SECRET = 'TU_API_SECRET'
-API_PASSPHRASE = 'TU_PASSPHRASE'
-BASE_URL = 'https://api.bitget.com/api/v2'
+API_KEY = os.getenv("BITGET_API_KEY")
+API_SECRET = os.getenv("BITGET_API_SECRET")
+API_PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
+BASE_URL = "https://api.bitget.com"
 
-# Simbolos disponibles (se podría consultar esto desde la API de Bitget)
-SYMBOL_MAP = {
-    'BTCUSDT': 'BTCUSDT_UMCBL',
-    'ETHUSDT': 'ETHUSDT_UMCBL',
-    'SOLUSDT': 'SOLUSDT_UMCBL'
-    # Añade otros símbolos necesarios
+HEADERS = {
+    "Content-Type": "application/json",
+    "ACCESS-KEY": API_KEY,
+    "ACCESS-PASSPHRASE": API_PASSPHRASE
 }
 
-def get_valid_symbol(input_symbol):
-    return SYMBOL_MAP.get(input_symbol.upper())
+def sign_request(timestamp, method, path, body=""):
+    if body:
+        body_str = json.dumps(body, separators=(",", ":"))
+    else:
+        body_str = ""
+    pre_hash = f"{timestamp}{method.upper()}{path}{body_str}"
+    signature = hmac.new(
+        API_SECRET.encode("utf-8"),
+        pre_hash.encode("utf-8"),
+        hashlib.sha256
+    ).digest()
+    return base64.b64encode(signature).decode()
 
-def create_order(symbol, side, size):
-    endpoint = f"{BASE_URL}/mix/order/place"
+def get_real_symbol(symbol):
+    if symbol.endswith("_UMCBL"):
+        return symbol
+    return symbol + "_UMCBL"
+
+@app.route("/", methods=["POST"])
+def webhook():
+    data = request.get_json()
+    print(f"📨 Payload recibido: {data}")
+
+    signal = data.get("signal")
+    symbol = data.get("symbol", "BTCUSDT")
+    real_symbol = get_real_symbol(symbol)
+
+    print(f"✅ Símbolo real encontrado: {real_symbol}")
+
+    if signal == "ENTRY_LONG":
+        return place_order(real_symbol, side="open_long")
+    elif signal == "ENTRY_SHORT":
+        return place_order(real_symbol, side="open_short")
+    elif signal == "EXIT_CONFIRMED":
+        return close_position(real_symbol)
+    else:
+        return jsonify({"message": "❓ Señal no reconocida"}), 400
+
+def place_order(symbol, side):
+    print(f"🚀 Entrada {'LONG' if side == 'open_long' else 'SHORT'}")
+
+    path = "/api/mix/v1/order/place-order"
+    timestamp = str(int(time.time() * 1000))
+
     body = {
         "symbol": symbol,
         "marginCoin": "USDT",
-        "side": side,
+        "side": "buy" if side == "open_long" else "sell",
         "orderType": "market",
-        "size": size,
-        "tradeSide": "open",
-        "clientOid": str(uuid.uuid4()),
-        "timeInForceValue": "normal"
+        "size": "0.1",
+        "marginMode": "crossed",
+        "positionSide": "long" if side == "open_long" else "short",
+        "clientOid": str(uuid.uuid4())
     }
-    headers = {
-        "Content-Type": "application/json",
-        "ACCESS-KEY": API_KEY,
-        "ACCESS-SIGN": "firma_generada",  # Firma según API Bitget
-        "ACCESS-TIMESTAMP": "timestamp",
-        "ACCESS-PASSPHRASE": API_PASSPHRASE
-    }
-    response = requests.post(endpoint, json=body, headers=headers)
-    return response.status_code, response.text
+
+    signature = sign_request(timestamp, "POST", path, body)
+
+    headers = HEADERS.copy()
+    headers["ACCESS-TIMESTAMP"] = timestamp
+    headers["ACCESS-SIGN"] = signature
+
+    response = requests.post(BASE_URL + path, headers=headers, data=json.dumps(body))
+    print(f"🟢 ORDEN {'BUY' if side == 'open_long' else 'SELL'} → {response.status_code}, {response.text}")
+    return jsonify({"message": "Order sent", "status": response.status_code, "response": response.json()}), 200
 
 def close_position(symbol):
-    endpoint = f"{BASE_URL}/mix/order/close-position"
+    print("🔄 Señal de cierre recibida.")
+
+    path = "/api/mix/v1/position/close-position"
+    timestamp = str(int(time.time() * 1000))
+
     body = {
         "symbol": symbol,
-        "marginCoin": "USDT"
+        "marginCoin": "USDT",
+        "positionSide": "long",  # ajusta si soportas también short
     }
-    headers = {
-        "Content-Type": "application/json",
-        "ACCESS-KEY": API_KEY,
-        "ACCESS-SIGN": "firma_generada",
-        "ACCESS-TIMESTAMP": "timestamp",
-        "ACCESS-PASSPHRASE": API_PASSPHRASE
-    }
-    response = requests.post(endpoint, json=body, headers=headers)
-    return response.status_code, response.text
 
-@app.route('/', methods=['POST'])
-def webhook():
-    payload = request.get_json()
-    print(f"📨 Payload recibido: {payload}")
+    signature = sign_request(timestamp, "POST", path, body)
 
-    signal = payload.get('signal')
-    symbol_input = payload.get('symbol', 'BTCUSDT')
-    symbol = get_valid_symbol(symbol_input)
+    headers = HEADERS.copy()
+    headers["ACCESS-TIMESTAMP"] = timestamp
+    headers["ACCESS-SIGN"] = signature
 
-    if not symbol:
-        print(f"❌ Símbolo no reconocido: {symbol_input}")
-        return jsonify({'error': 'Símbolo inválido'}), 400
+    response = requests.post(BASE_URL + path, headers=headers, data=json.dumps(body))
+    print(f"📊 Respuesta de posición: {response.json()}")
 
-    print(f"✅ Símbolo real encontrado: {symbol}")
+    if response.status_code != 200:
+        print("⚠️ Error al cerrar posición")
+    return jsonify({"message": "Exit signal processed", "status": response.status_code, "response": response.json()}), 200
 
-    if signal == 'ENTRY_LONG':
-        print("🚀 Entrada LONG")
-        status, response = create_order(symbol, 'buy', 0.1)
-        print(f"🟢 ORDEN BUY → {status}, {response}")
-        return '', 200
-
-    elif signal == 'ENTRY_SHORT':
-        print("📊 Entrada SHORT")
-        status, response = create_order(symbol, 'sell', 0.1)
-        print(f"🔴 ORDEN SELL → {status}, {response}")
-        return '', 200
-
-    elif signal == 'EXIT_CONFIRMED':
-        print("🔄 Señal de cierre recibida.")
-        status, response = close_position(symbol)
-        print(f"📊 Respuesta de posición: {response}")
-        return '', 200
-
-    else:
-        print(f"⚠️ Señal desconocida: {signal}")
-        return jsonify({'error': 'Señal desconocida'}), 400
-
-if __name__ == '__main__':
-    app.run(debug=True, port=10000, host='0.0.0.0')
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
