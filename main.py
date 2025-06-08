@@ -16,27 +16,24 @@ API_PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
 BASE_URL = "https://api.bitget.com"
 PRODUCT_TYPE = "USDT-FUTURES"
 MARGIN_COIN = "USDT"
-MARGIN_MODE = "crossed"  # o "isolated" si trabajas en ese modo
+MARGIN_MODE = "crossed"  # O "isolated"
 
-# 🔎 Detectar símbolo real (ej: SOLUSDT → SOLUSDT_UMCBL)
+# 🔎 Obtener símbolo real como SOLUSDT_UMCBL
 def get_real_symbol(symbol):
     try:
         resp = requests.get(
             f"{BASE_URL}/api/v2/mix/market/contracts",
             params={"productType": PRODUCT_TYPE}
         )
-        contracts = resp.json().get("data", [])
-        for c in contracts:
-            if c["symbol"].startswith(symbol):
-                print(f"✅ Símbolo real encontrado: {c['symbol']}")
-                return c["symbol"]
-        print("❌ Símbolo no válido.")
-        return None
+        data = resp.json().get("data", [])
+        for contract in data:
+            if contract["symbol"].startswith(symbol):
+                return contract["symbol"]
     except Exception as e:
-        print("⚠️ Error buscando símbolo:", str(e))
-        return None
+        print("⚠️ Error buscando símbolo real:", str(e))
+    return None
 
-# 🔏 Firma de autenticación
+# 🔏 Firma para autenticación
 def auth_headers(method, endpoint, body=""):
     timestamp = str(int(time.time() * 1000))
     prehash = timestamp + method.upper() + endpoint + body
@@ -53,13 +50,15 @@ def auth_headers(method, endpoint, body=""):
 # ✅ Crear orden de entrada
 def place_order(side, symbol):
     url = "/api/v2/mix/order/place-order"
+    order_direction = "open_long" if side == "BUY" else "open_short"
     body = {
         "symbol": symbol,
         "marginCoin": MARGIN_COIN,
-        "marginMode": MARGIN_MODE,
         "side": side,
         "orderType": "market",
         "size": "1",
+        "marginMode": MARGIN_MODE,
+        "orderDirection": order_direction,
         "timeInForceValue": "normal",
         "productType": PRODUCT_TYPE
     }
@@ -67,25 +66,6 @@ def place_order(side, symbol):
     headers = auth_headers("POST", url, json_body)
     resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
     print(f"🟢 ORDEN {side} → {resp.status_code}, {resp.text}")
-
-# 🧨 Orden de cierre
-def place_close_order(side, size, symbol):
-    url = "/api/v2/mix/order/place-order"
-    body = {
-        "symbol": symbol,
-        "marginCoin": MARGIN_COIN,
-        "marginMode": MARGIN_MODE,
-        "side": side,
-        "orderType": "market",
-        "size": str(size),
-        "timeInForceValue": "normal",
-        "orderDirection": "close_long" if side == "SELL" else "close_short",
-        "productType": PRODUCT_TYPE
-    }
-    json_body = json.dumps(body)
-    headers = auth_headers("POST", url, json_body)
-    resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
-    print(f"🔴 ORDEN CIERRE {side} → {resp.status_code}, {resp.text}")
 
 # ❌ Cerrar posiciones
 def close_positions(symbol):
@@ -114,35 +94,54 @@ def close_positions(symbol):
     except Exception as e:
         print("❌ Error al interpretar posición:", str(e))
 
-# 🌐 Ruta principal del webhook
+# 🧨 Orden de cierre
+def place_close_order(side, size, symbol):
+    order_direction = "close_long" if side == "SELL" else "close_short"
+    url = "/api/v2/mix/order/place-order"
+    body = {
+        "symbol": symbol,
+        "marginCoin": MARGIN_COIN,
+        "side": side,
+        "orderType": "market",
+        "size": str(size),
+        "marginMode": MARGIN_MODE,
+        "orderDirection": order_direction,
+        "timeInForceValue": "normal",
+        "productType": PRODUCT_TYPE
+    }
+    json_body = json.dumps(body)
+    headers = auth_headers("POST", url, json_body)
+    resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
+    print(f"🔴 ORDEN CIERRE {side} → {resp.status_code}, {resp.text}")
+
+# 🌐 Ruta webhook
 @app.route("/", methods=["POST"])
 def webhook():
     data = request.json
     print("📨 Payload recibido:", data)
     signal = data.get("signal")
-    base_symbol = data.get("symbol")
+    input_symbol = data.get("symbol", "SOLUSDT")
+    real_symbol = get_real_symbol(input_symbol)
 
-    if not base_symbol:
-        return "❌ Símbolo no proporcionado", 400
+    if not real_symbol:
+        print(f"❌ Símbolo no válido: {input_symbol}")
+        return "Invalid symbol", 400
 
-    symbol = get_real_symbol(base_symbol)
-    if not symbol:
-        return "❌ Símbolo no encontrado", 400
+    print(f"✅ Símbolo real encontrado: {real_symbol}")
 
     if signal == "ENTRY_LONG":
         print("🚀 Entrada LONG")
-        place_order("BUY", symbol)
+        place_order("BUY", real_symbol)
     elif signal == "ENTRY_SHORT":
         print("📉 Entrada SHORT")
-        place_order("SELL", symbol)
+        place_order("SELL", real_symbol)
     elif signal and signal.startswith("EXIT"):
-        close_positions(symbol)
+        close_positions(real_symbol)
     else:
         print("⚠️ Señal desconocida:", signal)
 
     return "OK", 200
 
-# 🟢 Ejecución local
+# 🟢 Ejecutar localmente
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
-
