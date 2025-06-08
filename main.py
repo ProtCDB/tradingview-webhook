@@ -1,115 +1,92 @@
 from flask import Flask, request, jsonify
-import hmac
-import hashlib
-import base64
-import time
 import requests
-import json
-import uuid
-import os
 
 app = Flask(__name__)
 
-API_KEY = os.getenv("BITGET_API_KEY")
-API_SECRET = os.getenv("BITGET_API_SECRET")
-API_PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
-BASE_URL = "https://api.bitget.com"
+API_KEY = 'TU_API_KEY'  # ← tus claves ya estaban bien
+API_SECRET = 'TU_API_SECRET'
+BASE_URL = 'https://api.bingx.com'
 
 HEADERS = {
-    "Content-Type": "application/json",
-    "ACCESS-KEY": API_KEY,
-    "ACCESS-PASSPHRASE": API_PASSPHRASE
+    'X-BX-APIKEY': API_KEY,
+    'Content-Type': 'application/json'
 }
 
-def sign_request(timestamp, method, path, body=""):
-    if body:
-        body_str = json.dumps(body, separators=(",", ":"))
-    else:
-        body_str = ""
-    pre_hash = f"{timestamp}{method.upper()}{path}{body_str}"
-    signature = hmac.new(
-        API_SECRET.encode("utf-8"),
-        pre_hash.encode("utf-8"),
-        hashlib.sha256
-    ).digest()
-    return base64.b64encode(signature).decode()
-
 def get_real_symbol(symbol):
-    if symbol.endswith("_UMCBL"):
-        return symbol
-    return symbol + "_UMCBL"
+    if not symbol.endswith('_UMCBL'):
+        symbol += '_UMCBL'
+    return symbol
 
-@app.route("/", methods=["POST"])
+def create_order(symbol, side, positionSide):
+    url = f'{BASE_URL}/openApi/swap/v2/trade/order'
+    body = {
+        "symbol": symbol,
+        "price": "",
+        "vol": "0.01",  # Ajusta tu tamaño de orden si es necesario
+        "side": side,
+        "type": "market",
+        "openType": "isolated",
+        "positionSide": positionSide,
+        "leverage": "5",
+        "externalOid": f"{positionSide.lower()}_entry"
+    }
+
+    response = requests.post(url, headers=HEADERS, json=body)
+    return response.status_code, response.text
+
+def close_position(symbol, positionSide):
+    url = f'{BASE_URL}/openApi/swap/v2/trade/close-position'
+    body = {
+        "symbol": symbol,
+        "positionSide": positionSide,
+        "marginCoin": "USDT"
+    }
+
+    response = requests.post(url, headers=HEADERS, json=body)
+    return response.status_code, response.text
+
+@app.route('/', methods=['POST'])
 def webhook():
     data = request.get_json()
+    signal = data.get('signal')
+    symbol = data.get('symbol', 'BTCUSDT')
+
     print(f"📨 Payload recibido: {data}")
 
-    signal = data.get("signal")
-    symbol = data.get("symbol", "BTCUSDT")
     real_symbol = get_real_symbol(symbol)
-
     print(f"✅ Símbolo real encontrado: {real_symbol}")
 
-    if signal == "ENTRY_LONG":
-        return place_order(real_symbol, side="open_long")
-    elif signal == "ENTRY_SHORT":
-        return place_order(real_symbol, side="open_short")
-    elif signal == "EXIT_CONFIRMED":
-        return close_position(real_symbol)
+    if signal == 'ENTRY_LONG':
+        print("🚀 Entrada LONG")
+        status, res = create_order(real_symbol, side='BUY', positionSide='LONG')
+        print(f"🟢 ORDEN BUY → {status}, {res}")
+
+    elif signal == 'ENTRY_SHORT':
+        print("🔻 Entrada SHORT")
+        status, res = create_order(real_symbol, side='SELL', positionSide='SHORT')
+        print(f"🔴 ORDEN SELL → {status}, {res}")
+
+    elif signal in ['EXIT_LONG_TP', 'EXIT_LONG_SL']:
+        print("📉 Salida LONG (TP o SL)")
+        status, res = close_position(real_symbol, positionSide='LONG')
+        print(f"🟡 CERRAR LONG → {status}, {res}")
+
+    elif signal in ['EXIT_SHORT_TP', 'EXIT_SHORT_SL']:
+        print("📈 Salida SHORT (TP o SL)")
+        status, res = close_position(real_symbol, positionSide='SHORT')
+        print(f"🔵 CERRAR SHORT → {status}, {res}")
+
+    elif signal == 'EXIT_CONFIRMED':
+        print("🔄 Señal de cierre recibida.")
+        for pos in ['LONG', 'SHORT']:
+            status, res = close_position(real_symbol, positionSide=pos)
+            print(f"⚪️ CERRAR {pos} → {status}, {res}")
+
     else:
-        return jsonify({"message": "❓ Señal no reconocida"}), 400
+        print(f"❓ Señal desconocida: {signal}")
+        return jsonify({'error': 'Señal desconocida'}), 400
 
-def place_order(symbol, side):
-    print(f"🚀 Entrada {'LONG' if side == 'open_long' else 'SHORT'}")
+    return jsonify({'success': True}), 200
 
-    path = "/api/mix/v1/order/place-order"
-    timestamp = str(int(time.time() * 1000))
-
-    body = {
-        "symbol": symbol,
-        "marginCoin": "USDT",
-        "side": "buy" if side == "open_long" else "sell",
-        "orderType": "market",
-        "size": "0.1",
-        "marginMode": "crossed",
-        "positionSide": "long" if side == "open_long" else "short",
-        "clientOid": str(uuid.uuid4())
-    }
-
-    signature = sign_request(timestamp, "POST", path, body)
-
-    headers = HEADERS.copy()
-    headers["ACCESS-TIMESTAMP"] = timestamp
-    headers["ACCESS-SIGN"] = signature
-
-    response = requests.post(BASE_URL + path, headers=headers, data=json.dumps(body))
-    print(f"🟢 ORDEN {'BUY' if side == 'open_long' else 'SELL'} → {response.status_code}, {response.text}")
-    return jsonify({"message": "Order sent", "status": response.status_code, "response": response.json()}), 200
-
-def close_position(symbol):
-    print("🔄 Señal de cierre recibida.")
-
-    path = "/api/mix/v1/position/close-position"
-    timestamp = str(int(time.time() * 1000))
-
-    body = {
-        "symbol": symbol,
-        "marginCoin": "USDT",
-        "positionSide": "long",  # ajusta si soportas también short
-    }
-
-    signature = sign_request(timestamp, "POST", path, body)
-
-    headers = HEADERS.copy()
-    headers["ACCESS-TIMESTAMP"] = timestamp
-    headers["ACCESS-SIGN"] = signature
-
-    response = requests.post(BASE_URL + path, headers=headers, data=json.dumps(body))
-    print(f"📊 Respuesta de posición: {response.json()}")
-
-    if response.status_code != 200:
-        print("⚠️ Error al cerrar posición")
-    return jsonify({"message": "Exit signal processed", "status": response.status_code, "response": response.json()}), 200
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=10000)
