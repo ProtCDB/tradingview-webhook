@@ -9,20 +9,21 @@ from flask import Flask, request
 
 app = Flask(__name__)
 
-# 🔐 Claves de API desde variables de entorno
+# 🔐 Cargar claves desde entorno
 API_KEY = os.getenv("BITGET_API_KEY")
 API_SECRET = os.getenv("BITGET_API_SECRET")
 API_PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
 
-# 📦 Constantes globales
 BASE_URL = "https://api.bitget.com"
 PRODUCT_TYPE = "USDT-FUTURES"
 MARGIN_COIN = "USDT"
-MARGIN_MODE = "cross"  # correcto: "cross"
-OPEN_TYPE = 1          # unilateral
+MARGIN_MODE = "crossed"
 
-# 📥 Verifica símbolo y devuelve el nombre real usado por Bitget (ej: "SOLUSDT_UMCBL")
-def get_real_symbol(symbol):
+if not API_KEY or not API_SECRET or not API_PASSPHRASE:
+    raise Exception("❌ Faltan claves de entorno.")
+
+# 🔎 Verificar si el símbolo es válido en Bitget
+def is_symbol_valid(symbol):
     try:
         resp = requests.get(
             f"{BASE_URL}/api/v2/mix/market/contracts",
@@ -30,15 +31,16 @@ def get_real_symbol(symbol):
         )
         contracts = resp.json().get("data", [])
         for c in contracts:
-            if c["symbol"].startswith(symbol):
-                print(f"✅ Símbolo real encontrado: {c['symbol']}")
-                return c["symbol"]
-        print("❌ Símbolo no encontrado:", symbol)
+            if c["symbol"] == symbol:
+                print(f"✅ Símbolo real encontrado: {symbol}")
+                return True
+        print(f"❌ Símbolo no encontrado: {symbol}")
+        return False
     except Exception as e:
-        print("❌ Error verificando símbolo:", str(e))
-    return None
+        print("⚠️ Error verificando símbolo:", str(e))
+        return False
 
-# 🔏 Genera headers firmados para autenticar con Bitget
+# 🔏 Firma según Bitget (base64 HMAC-SHA256)
 def auth_headers(method, endpoint, body=""):
     timestamp = str(int(time.time() * 1000))
     prehash = timestamp + method.upper() + endpoint + body
@@ -52,31 +54,30 @@ def auth_headers(method, endpoint, body=""):
         "Content-Type": "application/json"
     }
 
-# 🟢 Orden de entrada (compra o venta)
-def place_order(side, symbol_real):
+# ✅ Crear orden de entrada
+def place_order(side, symbol):
     url = "/api/v2/mix/order/place-order"
     body = {
-        "symbol": symbol_real,
+        "symbol": symbol,
         "marginCoin": MARGIN_COIN,
         "side": side,
         "orderType": "market",
         "size": "1",
         "timeInForceValue": "normal",
         "productType": PRODUCT_TYPE,
-        "marginMode": MARGIN_MODE,
-        "openType": OPEN_TYPE
+        "marginMode": MARGIN_MODE
     }
     json_body = json.dumps(body)
     headers = auth_headers("POST", url, json_body)
     resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
     print(f"🟢 ORDEN {side} → {resp.status_code}, {resp.text}")
 
-# ❌ Orden de cierre (detecta si hay long o short abierto y cierra)
-def close_positions(symbol_real):
+# ❌ Cerrar posiciones
+def close_positions(symbol):
     print("🔄 Señal de cierre recibida.")
-    url = f"/api/v2/mix/position/single-position?symbol={symbol_real}&marginCoin={MARGIN_COIN}"
-    headers = auth_headers("GET", f"/api/v2/mix/position/single-position?symbol={symbol_real}&marginCoin={MARGIN_COIN}")
-    resp = requests.get(BASE_URL + url, headers=headers)
+    endpoint = f"/api/v2/mix/position/single-position?symbol={symbol}&marginCoin={MARGIN_COIN}"
+    headers = auth_headers("GET", endpoint)
+    resp = requests.get(BASE_URL + endpoint, headers=headers)
     print("📊 Respuesta de posición:", resp.json())
 
     data = resp.json()
@@ -91,34 +92,33 @@ def close_positions(symbol_real):
 
         if long_pos > 0:
             print("🔴 Cerrando LONG...")
-            place_close_order("SELL", long_pos, symbol_real)
+            place_close_order("SELL", long_pos, symbol, "close_long")
         if short_pos > 0:
             print("🔴 Cerrando SHORT...")
-            place_close_order("BUY", short_pos, symbol_real)
+            place_close_order("BUY", short_pos, symbol, "close_short")
     except Exception as e:
         print("❌ Error al interpretar posición:", str(e))
 
-# 🧨 Ejecuta orden de cierre
-def place_close_order(side, size, symbol_real):
+# 🧨 Orden de cierre
+def place_close_order(side, size, symbol, direction):
     url = "/api/v2/mix/order/place-order"
     body = {
-        "symbol": symbol_real,
+        "symbol": symbol,
         "marginCoin": MARGIN_COIN,
         "side": side,
         "orderType": "market",
         "size": str(size),
         "timeInForceValue": "normal",
-        "orderDirection": "close_long" if side == "SELL" else "close_short",
+        "orderDirection": direction,
         "productType": PRODUCT_TYPE,
-        "marginMode": MARGIN_MODE,
-        "openType": OPEN_TYPE
+        "marginMode": MARGIN_MODE
     }
     json_body = json.dumps(body)
     headers = auth_headers("POST", url, json_body)
     resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
     print(f"🔴 ORDEN CIERRE {side} → {resp.status_code}, {resp.text}")
 
-# 🌐 Webhook que recibe señales
+# 🌐 Ruta webhook
 @app.route("/", methods=["POST"])
 def webhook():
     data = request.json
@@ -126,27 +126,22 @@ def webhook():
     signal = data.get("signal")
     symbol = data.get("symbol")
 
-    if not symbol:
-        print("⚠️ Falta símbolo en la señal.")
-        return "Missing symbol", 400
-
-    symbol_real = get_real_symbol(symbol)
-    if not symbol_real:
-        return "Invalid symbol", 400
+    if not symbol or not is_symbol_valid(symbol):
+        return "Símbolo inválido o no encontrado", 400
 
     if signal == "ENTRY_LONG":
         print("🚀 Entrada LONG")
-        place_order("BUY", symbol_real)
+        place_order("BUY", symbol)
     elif signal == "ENTRY_SHORT":
         print("📉 Entrada SHORT")
-        place_order("SELL", symbol_real)
+        place_order("SELL", symbol)
     elif signal and signal.startswith("EXIT"):
-        close_positions(symbol_real)
+        close_positions(symbol)
     else:
         print("⚠️ Señal desconocida:", signal)
 
     return "OK", 200
 
-# 🟢 Local test/debug
+# 🟢 Local debug
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
