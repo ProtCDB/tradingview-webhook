@@ -1,62 +1,46 @@
 import os
-import json
+import time
 import hmac
 import hashlib
 import base64
-import time
-import requests
+import json
 from flask import Flask, request
+import requests
+from dotenv import load_dotenv
 
-app = Flask(__name__)
+# Cargar variables de entorno
+load_dotenv()
 
+# Configuración
 API_KEY = os.getenv("BITGET_API_KEY")
 API_SECRET = os.getenv("BITGET_API_SECRET")
 API_PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
+
 BASE_URL = "https://api.bitget.com"
-PRODUCT_TYPE = "USDT-FUTURES"
 MARGIN_COIN = "USDT"
 
-def get_valid_symbol(input_symbol):
-    try:
-        resp = requests.get(f"{BASE_URL}/api/v2/mix/market/contracts",
-                            params={"productType": PRODUCT_TYPE})
-        for c in resp.json().get("data", []):
-            if c["symbol"].replace("-", "").upper() == input_symbol.upper():
-                return c["symbol"]
-    except Exception as e:
-        print("❌ Error obteniendo contratos:", str(e))
-    return None
+app = Flask(__name__)
+
+def get_timestamp():
+    return str(int(time.time() * 1000))
+
+def sign(message, secret):
+    secret_bytes = secret.encode()
+    message_bytes = message.encode()
+    return base64.b64encode(hmac.new(secret_bytes, message_bytes, hashlib.sha256).digest()).decode()
 
 def auth_headers(method, endpoint, body=""):
-    ts = str(int(time.time() * 1000))
-    prehash = ts + method.upper() + endpoint + body
-    signature = base64.b64encode(
-        hmac.new(API_SECRET.encode(), prehash.encode(), hashlib.sha256).digest()
-    ).decode()
+    timestamp = get_timestamp()
+    prehash = timestamp + method.upper() + endpoint + body
+    signature = sign(prehash, API_SECRET)
+
     return {
         "ACCESS-KEY": API_KEY,
         "ACCESS-SIGN": signature,
-        "ACCESS-TIMESTAMP": ts,
+        "ACCESS-TIMESTAMP": timestamp,
         "ACCESS-PASSPHRASE": API_PASSPHRASE,
         "Content-Type": "application/json"
     }
-
-def place_order(symbol, side):
-    url = "/api/v2/mix/order/place-order"
-    body = json.dumps({
-        "symbol": symbol,
-        "marginCoin": MARGIN_COIN,
-        "side": side,
-        "orderType": "market",
-        "size": "1",
-        "timeInForceValue": "normal",
-        "productType": PRODUCT_TYPE,
-        "marginMode": "isolated"
-    })
-    resp = requests.post(BASE_URL + url,
-                         headers=auth_headers("POST", url, body),
-                         data=body)
-    print(f"🟢 ORDEN {side} → {resp.status_code}, {resp.text}")
 
 def close_positions(symbol):
     print("🔄 Señal de cierre recibida.")
@@ -66,68 +50,38 @@ def close_positions(symbol):
     endpoint_full = f"{endpoint_base}?{qs}"
 
     headers = auth_headers("GET", endpoint_full)
-    resp = requests.get(BASE_URL + endpoint_full, headers=headers)
-    print("📊 Respuesta de posición:", resp.json())
+    print("📤 GET:", endpoint_full)
+    print("📥 Headers:", headers)
 
-    data = resp.json().get("data")
-    if not data:
+    resp = requests.get(BASE_URL + endpoint_full, headers=headers)
+    print("📊 Respuesta de posición:", resp.status_code, resp.text)
+
+    data = resp.json()
+    if not data.get("data"):
         print("⚠️ No hay posición abierta para cerrar.")
         return
 
-    long_avail = float(data.get("long", {}).get("available", 0))
-    short_avail = float(data.get("short", {}).get("available", 0))
-
-    if long_avail > 0:
-        print("🔴 Cerrando LONG...")
-        place_close_order(symbol, "SELL", long_avail)
-    if short_avail > 0:
-        print("🔴 Cerrando SHORT...")
-        place_close_order(symbol, "BUY", short_avail)
-
-def place_close_order(symbol, side, size):
-    url = "/api/v2/mix/order/place-order"
-    body = json.dumps({
-        "symbol": symbol,
-        "marginCoin": MARGIN_COIN,
-        "side": side,
-        "orderType": "market",
-        "size": str(size),
-        "timeInForceValue": "normal",
-        "productType": PRODUCT_TYPE,
-        "marginMode": "isolated",
-        "reduceOnly": True
-    })
-    resp = requests.post(BASE_URL + url,
-                         headers=auth_headers("POST", url, body),
-                         data=body)
-    print(f"🔴 ORDEN CIERRE {side} → {resp.status_code}, {resp.text}")
+    # Aquí iría la lógica para cerrar la posición si existe una activa
+    # Por ahora solo mostramos los datos
+    print("📈 Posición abierta detectada:", data["data"])
 
 @app.route("/", methods=["POST"])
 def webhook():
-    data = request.json or {}
-    print("📨 Payload recibido:", data)
-    signal = data.get("signal")
-    raw_symbol = data.get("symbol", "").upper()
+    payload = request.json
+    print("📨 Payload recibido:", payload)
 
-    real_symbol = get_valid_symbol(raw_symbol)
-    if not real_symbol:
-        print(f"❌ Símbolo no válido: {raw_symbol}")
-        return "Invalid symbol", 400
+    signal = payload.get("signal")
+    symbol = payload.get("symbol")
 
-    print(f"✅ Símbolo real encontrado: {real_symbol}")
+    if not signal or not symbol:
+        return "Missing data", 400
 
-    if signal == "ENTRY_LONG":
-        print("🚀 Entrada LONG")
-        place_order(real_symbol, "BUY")
-    elif signal == "ENTRY_SHORT":
-        print("📉 Entrada SHORT")
-        place_order(real_symbol, "SELL")
-    elif signal and signal.startswith("EXIT"):
-        close_positions(real_symbol)
-    else:
-        print("⚠️ Señal desconocida:", signal)
+    print("✅ Símbolo real encontrado:", symbol)
+
+    if signal == "EXIT_CONFIRMED":
+        close_positions(symbol)
 
     return "OK", 200
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
+    app.run(debug=True)
