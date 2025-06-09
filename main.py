@@ -29,19 +29,12 @@ def get_valid_symbol(input_symbol):
         print("❌ Error obteniendo contratos:", str(e))
     return None
 
-# 🔐 Headers de autenticación (versión corregida para query params)
-def auth_headers(method, endpoint, body="", query_params=None):
+# 🔐 Headers de autenticación
+def auth_headers(method, endpoint, body=""):
     timestamp = str(int(time.time() * 1000))
-
-    query_string = ""
-    if query_params:
-        query_string = "&".join(f"{k}={query_params[k]}" for k in sorted(query_params))
-        endpoint += "?" + query_string
-
-    prehash = timestamp + method.upper() + endpoint + (body or "")
+    prehash = timestamp + method.upper() + endpoint + body
     sign = hmac.new(API_SECRET.encode(), prehash.encode(), hashlib.sha256).digest()
     signature = base64.b64encode(sign).decode()
-
     return {
         "ACCESS-KEY": API_KEY,
         "ACCESS-SIGN": signature,
@@ -68,13 +61,23 @@ def place_order(symbol, side):
     resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
     print(f"🟢 ORDEN {side} → {resp.status_code}, {resp.text}")
 
-# ❌ Cerrar posiciones (firma corregida)
+# ✅ Cerrar posiciones con firma corregida
 def close_positions(symbol):
     print("🔄 Señal de cierre recibida.")
-    endpoint = "/api/v2/mix/position/single-position"
-    params = {"symbol": symbol, "marginCoin": MARGIN_COIN}
-    headers = auth_headers("GET", endpoint, query_params=params)
-    resp = requests.get(BASE_URL + endpoint, headers=headers, params=params)
+
+    query_params = {
+        "symbol": symbol,
+        "marginCoin": MARGIN_COIN
+    }
+
+    # Construir query string ordenado
+    query_string = "&".join(f"{k}={query_params[k]}" for k in sorted(query_params))
+    endpoint_base = "/api/v2/mix/position/single-position"
+    endpoint_full = f"{endpoint_base}?{query_string}"
+
+    headers = auth_headers("GET", endpoint_full)
+
+    resp = requests.get(BASE_URL + endpoint_full, headers=headers)
     print("📊 Respuesta de posición:", resp.json())
 
     data = resp.json()
@@ -96,7 +99,7 @@ def close_positions(symbol):
     except Exception as e:
         print("❌ Error interpretando posición:", str(e))
 
-# 🧨 Orden de cierre
+# ✅ Orden de cierre
 def place_close_order(symbol, side, size):
     url = "/api/v2/mix/order/place-order"
     body = {
