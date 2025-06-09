@@ -54,7 +54,7 @@ def place_order(symbol, side):
         "size": "1",
         "timeInForceValue": "normal",
         "productType": PRODUCT_TYPE,
-        "marginMode": "isolated"  # ← CAMBIADO a ISOLATED
+        "marginMode": "isolated"
     }
     json_body = json.dumps(body)
     headers = auth_headers("POST", url, json_body)
@@ -64,28 +64,22 @@ def place_order(symbol, side):
 # ❌ Cerrar posiciones
 def close_positions(symbol):
     print("🔄 Señal de cierre recibida.")
-
-    # Usar firma exacta con query string
     query_string = f"symbol={symbol}&marginCoin={MARGIN_COIN}"
-    endpoint = "/api/v2/mix/position/single-position"
-    full_path = endpoint + "?" + query_string
-
-    headers = auth_headers("GET", full_path)
-
-    resp = requests.get(BASE_URL + endpoint, headers=headers, params={
+    full_endpoint = f"/api/v2/mix/position/single-position?{query_string}"
+    headers = auth_headers("GET", full_endpoint)
+    resp = requests.get(BASE_URL + "/api/v2/mix/position/single-position", headers=headers, params={
         "symbol": symbol,
         "marginCoin": MARGIN_COIN
     })
+    print("📊 Respuesta de posición:", resp.json())
+
+    data = resp.json()
+    position = data.get("data")
+    if not position:
+        print("⚠️ No hay posición abierta para cerrar.")
+        return
 
     try:
-        data = resp.json()
-        print("📊 Respuesta de posición:", data)
-
-        position = data.get("data")
-        if not position:
-            print("⚠️ No hay posición abierta para cerrar.")
-            return
-
         long_pos = float(position.get("long", {}).get("available", 0))
         short_pos = float(position.get("short", {}).get("available", 0))
 
@@ -96,7 +90,7 @@ def close_positions(symbol):
             print("🔴 Cerrando SHORT...")
             place_close_order(symbol, "BUY", short_pos)
     except Exception as e:
-        print("❌ Error interpretando respuesta de posición:", str(e))
+        print("❌ Error interpretando posición:", str(e))
 
 # 🧨 Orden de cierre
 def place_close_order(symbol, side, size):
@@ -109,7 +103,7 @@ def place_close_order(symbol, side, size):
         "size": str(size),
         "timeInForceValue": "normal",
         "productType": PRODUCT_TYPE,
-        "marginMode": "isolated",  # ← CAMBIADO a ISOLATED
+        "marginMode": "isolated",
         "reduceOnly": True
     }
     json_body = json.dumps(body)
