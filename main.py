@@ -65,10 +65,14 @@ def place_order(symbol, side):
 def close_positions(symbol):
     print("🔄 Señal de cierre recibida.")
     endpoint = "/api/v2/mix/position/single-position"
-    query = f"?symbol={symbol}&marginCoin={MARGIN_COIN}&marginMode=isolated"
-    url = endpoint + query
-    headers = auth_headers("GET", url)
-    resp = requests.get(BASE_URL + url, headers=headers)
+    params = {
+        "symbol": symbol,
+        "marginCoin": MARGIN_COIN,
+        "marginMode": "isolated"
+    }
+    query_string = f"symbol={symbol}&marginCoin={MARGIN_COIN}&marginMode=isolated"
+    headers = auth_headers("GET", endpoint + "?" + query_string)
+    resp = requests.get(BASE_URL + endpoint, headers=headers, params=params)
     print("📊 Respuesta de posición:", resp.json())
 
     data = resp.json()
