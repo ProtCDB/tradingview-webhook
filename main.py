@@ -16,25 +16,32 @@ BASE_URL = "https://api.bitget.com"
 PRODUCT_TYPE = "USDT-FUTURES"
 MARGIN_COIN = "USDT"
 
-# ✅ Verificar símbolo válido y devolver con formato exacto (ej: SOL-USDT)
+# ✅ Verificar símbolo válido
 def get_valid_symbol(input_symbol):
     try:
         url = f"{BASE_URL}/api/v2/mix/market/contracts"
         resp = requests.get(url, params={"productType": PRODUCT_TYPE})
         contracts = resp.json().get("data", [])
         for c in contracts:
-            if c["symbol"].replace("-", "").upper() == input_symbol.upper():
-                return c["symbol"]  # ← Devuelve el formato "SOL-USDT"
+            if c["symbol"].startswith(input_symbol):
+                return c["symbol"]
     except Exception as e:
         print("❌ Error obteniendo contratos:", str(e))
     return None
 
-# 🔐 Headers de autenticación
-def auth_headers(method, endpoint, body=""):
+# 🔐 Headers de autenticación (versión corregida para query params)
+def auth_headers(method, endpoint, body="", query_params=None):
     timestamp = str(int(time.time() * 1000))
-    prehash = timestamp + method.upper() + endpoint + body
+
+    query_string = ""
+    if query_params:
+        query_string = "&".join(f"{k}={query_params[k]}" for k in sorted(query_params))
+        endpoint += "?" + query_string
+
+    prehash = timestamp + method.upper() + endpoint + (body or "")
     sign = hmac.new(API_SECRET.encode(), prehash.encode(), hashlib.sha256).digest()
     signature = base64.b64encode(sign).decode()
+
     return {
         "ACCESS-KEY": API_KEY,
         "ACCESS-SIGN": signature,
@@ -61,12 +68,13 @@ def place_order(symbol, side):
     resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
     print(f"🟢 ORDEN {side} → {resp.status_code}, {resp.text}")
 
-# ❌ Cerrar posiciones
+# ❌ Cerrar posiciones (firma corregida)
 def close_positions(symbol):
     print("🔄 Señal de cierre recibida.")
-    full_endpoint = f"/api/v2/mix/position/single-position?symbol={symbol}&marginCoin={MARGIN_COIN}"
-    headers = auth_headers("GET", full_endpoint)
-    resp = requests.get(BASE_URL + full_endpoint, headers=headers)
+    endpoint = "/api/v2/mix/position/single-position"
+    params = {"symbol": symbol, "marginCoin": MARGIN_COIN}
+    headers = auth_headers("GET", endpoint, query_params=params)
+    resp = requests.get(BASE_URL + endpoint, headers=headers, params=params)
     print("📊 Respuesta de posición:", resp.json())
 
     data = resp.json()
@@ -88,7 +96,7 @@ def close_positions(symbol):
     except Exception as e:
         print("❌ Error interpretando posición:", str(e))
 
-# 🧨 Orden de cierre (aún sin reduceOnly, se reactivará después si todo va bien)
+# 🧨 Orden de cierre
 def place_close_order(symbol, side, size):
     url = "/api/v2/mix/order/place-order"
     body = {
@@ -99,7 +107,8 @@ def place_close_order(symbol, side, size):
         "size": str(size),
         "timeInForceValue": "normal",
         "productType": PRODUCT_TYPE,
-        "marginMode": "isolated"
+        "marginMode": "isolated",
+        "reduceOnly": True
     }
     json_body = json.dumps(body)
     headers = auth_headers("POST", url, json_body)
