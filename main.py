@@ -67,10 +67,9 @@ def close_positions(symbol):
     endpoint = "/api/v2/mix/position/single-position"
     params = {
         "symbol": symbol,
-        "marginCoin": MARGIN_COIN,
-        "marginMode": "isolated"
+        "marginCoin": MARGIN_COIN
     }
-    query_string = f"symbol={symbol}&marginCoin={MARGIN_COIN}&marginMode=isolated"
+    query_string = f"symbol={symbol}&marginCoin={MARGIN_COIN}"
     headers = auth_headers("GET", endpoint + "?" + query_string)
     resp = requests.get(BASE_URL + endpoint, headers=headers, params=params)
     print("📊 Respuesta de posición:", resp.json())
