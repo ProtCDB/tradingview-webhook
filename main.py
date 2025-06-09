@@ -43,8 +43,53 @@ def auth_headers(method, endpoint, body=""):
         "Content-Type": "application/json"
     }
 
-# ✅ Crear orden de entrada o salida
-def place_order(symbol, side, size="1", reduce_only=False):
+# ✅ Crear orden de entrada
+def place_order(symbol, side):
+    url = "/api/v2/mix/order/place-order"
+    body = {
+        "symbol": symbol,
+        "marginCoin": MARGIN_COIN,
+        "side": side,
+        "orderType": "market",
+        "size": "1",
+        "timeInForceValue": "normal",
+        "productType": PRODUCT_TYPE,
+        "marginMode": "isolated"  # ⬅ CAMBIO HECHO AQUÍ
+    }
+    json_body = json.dumps(body)
+    headers = auth_headers("POST", url, json_body)
+    resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
+    print(f"🟢 ORDEN {side} → {resp.status_code}, {resp.text}")
+
+# ❌ Cerrar posiciones
+def close_positions(symbol):
+    print("🔄 Señal de cierre recibida.")
+    url = f"/api/v2/mix/position/single-position?symbol={symbol}&marginCoin={MARGIN_COIN}"
+    headers = auth_headers("GET", f"/api/v2/mix/position/single-position?symbol={symbol}&marginCoin={MARGIN_COIN}")
+    resp = requests.get(BASE_URL + url, headers=headers)
+    print("📊 Respuesta de posición:", resp.json())
+
+    data = resp.json()
+    position = data.get("data")
+    if not position:
+        print("⚠️ No hay posición abierta para cerrar.")
+        return
+
+    try:
+        long_pos = float(position.get("long", {}).get("available", 0))
+        short_pos = float(position.get("short", {}).get("available", 0))
+
+        if long_pos > 0:
+            print("🔴 Cerrando LONG...")
+            place_close_order(symbol, "SELL", long_pos)
+        if short_pos > 0:
+            print("🔴 Cerrando SHORT...")
+            place_close_order(symbol, "BUY", short_pos)
+    except Exception as e:
+        print("❌ Error interpretando posición:", str(e))
+
+# 🧨 Orden de cierre
+def place_close_order(symbol, side, size):
     url = "/api/v2/mix/order/place-order"
     body = {
         "symbol": symbol,
@@ -54,50 +99,13 @@ def place_order(symbol, side, size="1", reduce_only=False):
         "size": str(size),
         "timeInForceValue": "normal",
         "productType": PRODUCT_TYPE,
-        "marginMode": "crossed"
+        "marginMode": "isolated",  # ⬅ CAMBIO HECHO AQUÍ TAMBIÉN
+        "reduceOnly": True
     }
-    if reduce_only:
-        body["reduceOnly"] = True
-
     json_body = json.dumps(body)
     headers = auth_headers("POST", url, json_body)
     resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
-    print(f"{'🔴' if reduce_only else '🟢'} ORDEN {side} → {resp.status_code}, {resp.text}")
-
-# ❌ Cerrar posiciones
-def close_positions(symbol):
-    print("🔄 Señal de cierre recibida.")
-    
-    endpoint_path = "/api/v2/mix/position/single-position"
-    query_params = {
-        "symbol": symbol,
-        "marginCoin": MARGIN_COIN
-    }
-
-    # Firma sin incluir query params
-    headers = auth_headers("GET", endpoint_path)
-    resp = requests.get(BASE_URL + endpoint_path, headers=headers, params=query_params)
-    print("📊 Respuesta de posición:", resp.json())
-
-    data = resp.json().get("data", {})
-    if not data:
-        print("⚠️ No hay posición abierta para cerrar.")
-        return
-
-    try:
-        long_pos = float(data.get("long", {}).get("available", 0))
-        short_pos = float(data.get("short", {}).get("available", 0))
-
-        if long_pos > 0:
-            print(f"🔴 Cerrando posición LONG: {long_pos}")
-            place_order(symbol, "SELL", size=long_pos, reduce_only=True)
-
-        if short_pos > 0:
-            print(f"🔴 Cerrando posición SHORT: {short_pos}")
-            place_order(symbol, "BUY", size=short_pos, reduce_only=True)
-
-    except Exception as e:
-        print("❌ Error interpretando datos de posición:", str(e))
+    print(f"🔴 ORDEN CIERRE {side} → {resp.status_code}, {resp.text}")
 
 # 🌐 Webhook
 @app.route("/", methods=["POST"])
@@ -120,11 +128,7 @@ def webhook():
     elif signal == "ENTRY_SHORT":
         print("📉 Entrada SHORT")
         place_order(real_symbol, "SELL")
-    elif signal in [
-        "EXIT_LONG_SL", "EXIT_LONG_TP",
-        "EXIT_SHORT_SL", "EXIT_SHORT_TP",
-        "EXIT_CONFIRMED"
-    ]:
+    elif signal and signal.startswith("EXIT"):
         close_positions(real_symbol)
     else:
         print("⚠️ Señal desconocida:", signal)
