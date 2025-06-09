@@ -16,15 +16,15 @@ BASE_URL = "https://api.bitget.com"
 PRODUCT_TYPE = "USDT-FUTURES"
 MARGIN_COIN = "USDT"
 
-# ✅ Verificar símbolo válido
+# ✅ Verificar símbolo válido y devolver con formato exacto (ej: SOL-USDT)
 def get_valid_symbol(input_symbol):
     try:
         url = f"{BASE_URL}/api/v2/mix/market/contracts"
         resp = requests.get(url, params={"productType": PRODUCT_TYPE})
         contracts = resp.json().get("data", [])
         for c in contracts:
-            if c["symbol"].startswith(input_symbol):
-                return c["symbol"]
+            if c["symbol"].replace("-", "").upper() == input_symbol.upper():
+                return c["symbol"]  # ← Devuelve el formato "SOL-USDT"
     except Exception as e:
         print("❌ Error obteniendo contratos:", str(e))
     return None
@@ -88,7 +88,7 @@ def close_positions(symbol):
     except Exception as e:
         print("❌ Error interpretando posición:", str(e))
 
-# 🧨 Orden de cierre (sin reduceOnly por ahora)
+# 🧨 Orden de cierre (aún sin reduceOnly, se reactivará después si todo va bien)
 def place_close_order(symbol, side, size):
     url = "/api/v2/mix/order/place-order"
     body = {
@@ -100,7 +100,6 @@ def place_close_order(symbol, side, size):
         "timeInForceValue": "normal",
         "productType": PRODUCT_TYPE,
         "marginMode": "isolated"
-        # ❌ reduceOnly removido para test
     }
     json_body = json.dumps(body)
     headers = auth_headers("POST", url, json_body)
