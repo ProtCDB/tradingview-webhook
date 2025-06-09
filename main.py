@@ -54,7 +54,7 @@ def place_order(symbol, side):
         "size": "1",
         "timeInForceValue": "normal",
         "productType": PRODUCT_TYPE,
-        "marginMode": "isolated"  # ⬅ CAMBIO HECHO AQUÍ
+        "marginMode": "isolated"
     }
     json_body = json.dumps(body)
     headers = auth_headers("POST", url, json_body)
@@ -64,8 +64,10 @@ def place_order(symbol, side):
 # ❌ Cerrar posiciones
 def close_positions(symbol):
     print("🔄 Señal de cierre recibida.")
-    url = f"/api/v2/mix/position/single-position?symbol={symbol}&marginCoin={MARGIN_COIN}"
-    headers = auth_headers("GET", f"/api/v2/mix/position/single-position?symbol={symbol}&marginCoin={MARGIN_COIN}")
+    endpoint = "/api/v2/mix/position/single-position"
+    query = f"?symbol={symbol}&marginCoin={MARGIN_COIN}&marginMode=isolated"
+    url = endpoint + query
+    headers = auth_headers("GET", url)
     resp = requests.get(BASE_URL + url, headers=headers)
     print("📊 Respuesta de posición:", resp.json())
 
@@ -99,7 +101,7 @@ def place_close_order(symbol, side, size):
         "size": str(size),
         "timeInForceValue": "normal",
         "productType": PRODUCT_TYPE,
-        "marginMode": "isolated",  # ⬅ CAMBIO HECHO AQUÍ TAMBIÉN
+        "marginMode": "isolated",
         "reduceOnly": True
     }
     json_body = json.dumps(body)
