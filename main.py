@@ -88,7 +88,7 @@ def close_positions(symbol):
     except Exception as e:
         print("❌ Error interpretando posición:", str(e))
 
-# 🧨 Orden de cierre
+# 🧨 Orden de cierre (sin reduceOnly por ahora)
 def place_close_order(symbol, side, size):
     url = "/api/v2/mix/order/place-order"
     body = {
@@ -99,8 +99,8 @@ def place_close_order(symbol, side, size):
         "size": str(size),
         "timeInForceValue": "normal",
         "productType": PRODUCT_TYPE,
-        "marginMode": "isolated",
-        "reduceOnly": True
+        "marginMode": "isolated"
+        # ❌ reduceOnly removido para test
     }
     json_body = json.dumps(body)
     headers = auth_headers("POST", url, json_body)
