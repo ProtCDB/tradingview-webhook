@@ -64,13 +64,9 @@ def place_order(symbol, side):
 # ❌ Cerrar posiciones
 def close_positions(symbol):
     print("🔄 Señal de cierre recibida.")
-    query_string = f"symbol={symbol}&marginCoin={MARGIN_COIN}"
-    full_endpoint = f"/api/v2/mix/position/single-position?{query_string}"
+    full_endpoint = f"/api/v2/mix/position/single-position?symbol={symbol}&marginCoin={MARGIN_COIN}"
     headers = auth_headers("GET", full_endpoint)
-    resp = requests.get(BASE_URL + "/api/v2/mix/position/single-position", headers=headers, params={
-        "symbol": symbol,
-        "marginCoin": MARGIN_COIN
-    })
+    resp = requests.get(BASE_URL + full_endpoint, headers=headers)
     print("📊 Respuesta de posición:", resp.json())
 
     data = resp.json()
@@ -132,7 +128,7 @@ def webhook():
     elif signal == "ENTRY_SHORT":
         print("📉 Entrada SHORT")
         place_order(real_symbol, "SELL")
-    elif signal in ["EXIT_LONG_SL", "EXIT_LONG_TP", "EXIT_SHORT_SL", "EXIT_SHORT_TP", "EXIT_CONFIRMED"]:
+    elif signal and signal.startswith("EXIT"):
         close_positions(real_symbol)
     else:
         print("⚠️ Señal desconocida:", signal)
