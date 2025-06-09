@@ -43,7 +43,7 @@ def auth_headers(method, endpoint, body=""):
         "Content-Type": "application/json"
     }
 
-# ✅ Crear orden de entrada
+# ✅ Crear orden de entrada o salida
 def place_order(symbol, side, size="1", reduce_only=False):
     url = "/api/v2/mix/order/place-order"
     body = {
@@ -62,17 +62,19 @@ def place_order(symbol, side, size="1", reduce_only=False):
     json_body = json.dumps(body)
     headers = auth_headers("POST", url, json_body)
     resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
-    print(f"{'🔴 ORDEN CIERRE' if reduce_only else '🟢 ORDEN'} {side} → {resp.status_code}, {resp.text}")
+    print(f"{'🔴' if reduce_only else '🟢'} ORDEN {side} → {resp.status_code}, {resp.text}")
 
-# ✅ Cerrar posiciones (corregido)
+# ❌ Cerrar posiciones
 def close_positions(symbol):
     print("🔄 Señal de cierre recibida.")
+    
     endpoint_path = "/api/v2/mix/position/single-position"
     query_params = {
         "symbol": symbol,
         "marginCoin": MARGIN_COIN
     }
 
+    # Firma sin incluir query params
     headers = auth_headers("GET", endpoint_path)
     resp = requests.get(BASE_URL + endpoint_path, headers=headers, params=query_params)
     print("📊 Respuesta de posición:", resp.json())
@@ -118,7 +120,11 @@ def webhook():
     elif signal == "ENTRY_SHORT":
         print("📉 Entrada SHORT")
         place_order(real_symbol, "SELL")
-    elif signal and signal.startswith("EXIT"):
+    elif signal in [
+        "EXIT_LONG_SL", "EXIT_LONG_TP",
+        "EXIT_SHORT_SL", "EXIT_SHORT_TP",
+        "EXIT_CONFIRMED"
+    ]:
         close_positions(real_symbol)
     else:
         print("⚠️ Señal desconocida:", signal)
