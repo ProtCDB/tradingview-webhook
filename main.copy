@@ -16,7 +16,7 @@ BASE_URL = "https://api.bitget.com"
 PRODUCT_TYPE = "USDT-FUTURES"
 MARGIN_COIN = "USDT"
 
-# ✅ Verificar símbolo válido
+# ✅ Obtener símbolo real como lo usa Bitget (ej: SOLUSDT_UMCBL)
 def get_valid_symbol(input_symbol):
     try:
         url = f"{BASE_URL}/api/v2/mix/market/contracts"
@@ -24,7 +24,7 @@ def get_valid_symbol(input_symbol):
         contracts = resp.json().get("data", [])
         for c in contracts:
             if c["symbol"].startswith(input_symbol):
-                return c["symbol"]
+                return c["symbol"]  # Ejemplo: SOLUSDT_UMCBL
     except Exception as e:
         print("❌ Error obteniendo contratos:", str(e))
     return None
@@ -64,10 +64,16 @@ def place_order(symbol, side):
 # ❌ Cerrar posiciones
 def close_positions(symbol):
     print("🔄 Señal de cierre recibida.")
-    full_endpoint = f"/api/v2/mix/position/single-position?symbol={symbol}&marginCoin={MARGIN_COIN}"
+    endpoint = f"/api/mix/v1/position/singlePosition"
+    params = f"?symbol={symbol}&marginCoin={MARGIN_COIN}"
+    full_endpoint = endpoint + params
     headers = auth_headers("GET", full_endpoint)
+    print(f"📡 Llamando a endpoint: {full_endpoint}")
     resp = requests.get(BASE_URL + full_endpoint, headers=headers)
-    print("📊 Respuesta de posición:", resp.json())
+
+    if resp.status_code != 200:
+        print(f"❌ Error al obtener posición: Status {resp.status_code} - {resp.text}")
+        return
 
     data = resp.json()
     position = data.get("data")
