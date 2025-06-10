@@ -16,6 +16,7 @@ BASE_URL = "https://api.bitget.com"
 PRODUCT_TYPE = "USDT-FUTURES"
 MARGIN_COIN = "USDT"
 
+# Obtener símbolo real como lo usa Bitget (ej: SOLUSDT_UMCBL)
 def get_valid_symbol(input_symbol):
     try:
         url = f"{BASE_URL}/api/v2/mix/market/contracts"
@@ -28,6 +29,7 @@ def get_valid_symbol(input_symbol):
         print("❌ Error obteniendo contratos:", str(e))
     return None
 
+# Headers de autenticación
 def auth_headers(method, endpoint, body=""):
     timestamp = str(int(time.time() * 1000))
     prehash = timestamp + method.upper() + endpoint + body
@@ -41,6 +43,7 @@ def auth_headers(method, endpoint, body=""):
         "Content-Type": "application/json"
     }
 
+# Crear orden de entrada
 def place_order(symbol, side):
     url = "/api/v2/mix/order/place-order"
     body = {
@@ -58,6 +61,7 @@ def place_order(symbol, side):
     resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
     print(f"🟢 ORDEN {side} → {resp.status_code}, {resp.text}")
 
+# Orden de cierre
 def place_close_order(symbol, side, size):
     url = "/api/v2/mix/order/place-order"
     body = {
@@ -76,6 +80,7 @@ def place_close_order(symbol, side, size):
     resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
     print(f"🔴 ORDEN CIERRE {side} → {resp.status_code}, {resp.text}")
 
+# Cerrar posiciones
 def close_positions(symbol):
     print("🔄 Señal de cierre recibida.")
     endpoint = f"/api/mix/v1/position/singlePosition"
@@ -108,16 +113,20 @@ def close_positions(symbol):
     except Exception as e:
         print("❌ Error interpretando posición:", str(e))
 
-def list_positions():
-    url = "/api/mix/v1/position/openPositions"
-    headers = auth_headers("GET", url)
-    print(f"📡 Llamando a endpoint: {url}")
-    resp = requests.get(BASE_URL + url, headers=headers)
+# Listar posiciones (todas o por símbolo)
+def list_positions(symbol=None):
+    endpoint = "/api/mix/v1/position/positions"
+    if symbol and symbol != "ALL":
+        endpoint += f"?symbol={symbol}&marginCoin={MARGIN_COIN}"
+    headers = auth_headers("GET", endpoint)
+    print(f"📡 Llamando a endpoint: {endpoint}")
+    resp = requests.get(BASE_URL + endpoint, headers=headers)
     if resp.status_code != 200:
         print(f"❌ Error listando posiciones: {resp.status_code} - {resp.text}")
         return None
     return resp.json()
 
+# Webhook
 @app.route("/", methods=["POST"])
 def webhook():
     data = request.json
@@ -125,11 +134,18 @@ def webhook():
     signal = data.get("signal")
     raw_symbol = data.get("symbol", "").upper()
 
+    # Para listar todas posiciones no hace falta símbolo válido
     if signal == "LIST_POSITIONS":
-        positions = list_positions()
-        if positions is None:
-            return "Error listando posiciones", 500
-        return positions, 200
+        if raw_symbol in ("", "ALL"):
+            positions = list_positions()
+        else:
+            real_symbol = get_valid_symbol(raw_symbol)
+            if not real_symbol:
+                print(f"❌ Símbolo no válido: {raw_symbol}")
+                return "Invalid symbol", 400
+            positions = list_positions(real_symbol)
+        print("📋 Posiciones abiertas:", positions)
+        return "OK", 200
 
     real_symbol = get_valid_symbol(raw_symbol)
     if not real_symbol:
@@ -151,5 +167,6 @@ def webhook():
 
     return "OK", 200
 
+# Local debug
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
