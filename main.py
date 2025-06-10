@@ -78,8 +78,7 @@ def place_close_order(symbol, side, size):
 
 def close_positions(symbol):
     print("🔄 Señal de cierre recibida.")
-    # OJO: Quitamos marginCoin para evitar error 400172
-    full_endpoint = f"/api/v2/mix/position/single-position?symbol={symbol}"
+    full_endpoint = f"/api/mix/v1/position/singlePosition?symbol={symbol}&marginCoin={MARGIN_COIN}"
     print(f"📡 Llamando a endpoint: {full_endpoint}")
 
     headers = auth_headers("GET", full_endpoint)
