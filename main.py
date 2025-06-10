@@ -1,71 +1,110 @@
-import json
-from flask import Flask, request, jsonify
-import requests
-import hmac
-import hashlib
-import time
-import uuid
-from dotenv import load_dotenv
 import os
-
-load_dotenv()
+import uuid
+import json
+import requests
+from flask import Flask, request, jsonify
+from datetime import datetime
 
 app = Flask(__name__)
 
-API_KEY = os.getenv('API_KEY')
-API_SECRET = os.getenv('API_SECRET')
-API_PASS = os.getenv('API_PASS')
+# 🔐 Claves directamente en el código (solo para pruebas locales o en Render)
+API_KEY = "bg_68c52d41350e2c3fff36daec2388c935"
+API_SECRET = "975a43e9534e30c7e43493c1e74a4eb74c1a6a394af445211f48cc5196471bd7"
+API_PASS = "170514LCSDx"
+
 BASE_URL = "https://api.bitget.com"
 
-MARGIN_COIN = "USDT"
-PRODUCT_TYPE = "USDT-FUTURES"  # Necesario para el endpoint de listar posiciones
+headers = {
+    "ACCESS-KEY": API_KEY,
+    "ACCESS-SIGN": "",
+    "ACCESS-TIMESTAMP": "",
+    "ACCESS-PASSPHRASE": API_PASS,
+    "Content-Type": "application/json"
+}
 
-# 🔐 Autenticación
-def auth_headers(method, endpoint, body=""):
-    timestamp = str(int(time.time() * 1000))
-    pre_hash = f"{timestamp}{method.upper()}{endpoint}{body}"
-    sign = hmac.new(API_SECRET.encode(), pre_hash.encode(), hashlib.sha256).hexdigest()
-    return {
-        "ACCESS-KEY": API_KEY,
-        "ACCESS-SIGN": sign,
-        "ACCESS-TIMESTAMP": timestamp,
-        "ACCESS-PASSPHRASE": API_PASS,
-        "Content-Type": "application/json"
+# 🔧 Parámetros por defecto
+MARGIN_COIN = "USDT"
+SYMBOL = "SOLUSDT"
+
+@app.route("/", methods=["POST"])
+def webhook():
+    data = request.get_json()
+    print(f"📨 Payload recibido: {data}")
+
+    signal = data.get("signal")
+    symbol = data.get("symbol")
+
+    if not signal or not symbol:
+        return "Faltan datos", 400
+
+    print(f"✅ Símbolo recibido: {symbol}")
+
+    if signal == "ENTRY_LONG":
+        print("🚀 Entrada LONG")
+        return send_order(symbol, "open_long")
+
+    elif signal == "ENTRY_SHORT":
+        print("📉 Entrada SHORT")
+        return send_order(symbol, "open_short")
+
+    elif signal == "EXIT_CONFIRMED":
+        print("🔄 Señal de cierre recibida.")
+        return close_position(symbol)
+
+    elif signal == "LIST_POSITIONS":
+        return list_positions()
+
+    return "Señal no válida", 400
+
+def send_order(symbol, side):
+    url = f"{BASE_URL}/api/mix/v1/order/placeOrder"
+    body = {
+        "symbol": symbol,
+        "marginCoin": MARGIN_COIN,
+        "size": "1",
+        "price": "0",
+        "side": "buy" if side == "open_long" else "sell",
+        "orderType": "market",
+        "positionSide": side.split("_")[1],
+        "clientOid": str(uuid.uuid4())
     }
 
-# 📋 Listar posiciones abiertas
-def list_open_positions():
-    endpoint = "/api/v2/mix/position/all-position"
-    params = f"?productType={PRODUCT_TYPE}&marginCoin={MARGIN_COIN}"
-    headers = auth_headers("GET", endpoint + params)
-    resp = requests.get(BASE_URL + endpoint + params, headers=headers)
-    print("📋 Posiciones abiertas (status {}): {}".format(resp.status_code, resp.text))
-    return resp.json()
+    response = requests.post(url, headers=headers, data=json.dumps(body))
+    print(f"🟢 ORDEN {body['side'].upper()} → {response.status_code}, {response.text}")
+    return jsonify(success=True)
 
-# 📩 Webhook receptor
-@app.route('/', methods=['POST'])
-def webhook():
+def close_position(symbol):
+    endpoint = f"/api/mix/v1/position/singlePosition?symbol={symbol}&marginCoin={MARGIN_COIN}"
+    url = BASE_URL + endpoint
+    print(f"📡 Llamando a endpoint: {endpoint}")
+
+    response = requests.get(url, headers=headers)
     try:
-        data = request.get_json()
-        print("📨 Payload recibido:", data)
-
-        signal = data.get('signal')
-        symbol = data.get('symbol')
-
-        if not signal or not symbol:
-            return "Missing signal or symbol", 400
-
-        print(f"✅ Símbolo recibido: {symbol}")
-
-        if signal == "LIST_POSITIONS":
-            response = list_open_positions()
-            return jsonify(response)
-
-        return "Señal no reconocida para este ejemplo.", 200
-
+        position_data = response.json().get("data")
     except Exception as e:
-        print(f"❌ Error en webhook: {e}")
-        return "Error interno", 500
+        print(f"❌ Error interpretando posición: {e}")
+        return jsonify(success=False), 500
 
-if __name__ == '__main__':
-    app.run(debug=True)
+    if not position_data:
+        print("❌ No hay posición abierta.")
+        return jsonify(success=False), 400
+
+    side = position_data.get("holdSide")
+    if side == "long":
+        return send_order(symbol, "close_long")
+    elif side == "short":
+        return send_order(symbol, "close_short")
+    else:
+        print("❌ No se reconoce el lado de la posición.")
+        return jsonify(success=False), 400
+
+def list_positions():
+    endpoint = "/api/mix/v1/position/allPosition"
+    url = BASE_URL + endpoint
+
+    response = requests.get(url, headers=headers)
+    print(f"📋 Posiciones abiertas (status {response.status_code}): {response.text}")
+    return jsonify(success=response.ok)
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
