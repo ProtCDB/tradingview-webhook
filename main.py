@@ -109,7 +109,7 @@ def close_positions(symbol):
         print("❌ Error interpretando posición:", str(e))
 
 def list_all_positions():
-    endpoint = "/api/mix/v1/position/openPositions"
+    endpoint = "/api/mix/v1/position/allPosition"
     headers = auth_headers("GET", endpoint)
     print(f"📡 Llamando a endpoint: {endpoint}")
     resp = requests.get(BASE_URL + endpoint, headers=headers)
