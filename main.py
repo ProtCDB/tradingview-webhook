@@ -9,13 +9,17 @@ from flask import Flask, request
 
 app = Flask(__name__)
 
+# Claves desde variables de entorno (nunca las pongas directo en código)
 API_KEY = os.getenv("BITGET_API_KEY")
 API_SECRET = os.getenv("BITGET_API_SECRET")
 API_PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
 BASE_URL = "https://api.bitget.com"
+
+# Constantes para Futuros USDT
 PRODUCT_TYPE = "USDT-FUTURES"
 MARGIN_COIN = "USDT"
 
+# ✅ Obtener el símbolo real desde Bitget
 def get_valid_symbol(input_symbol):
     try:
         url = f"{BASE_URL}/api/v2/mix/market/contracts"
@@ -23,11 +27,12 @@ def get_valid_symbol(input_symbol):
         contracts = resp.json().get("data", [])
         for c in contracts:
             if c["symbol"].startswith(input_symbol):
-                return c["symbol"]
+                return c["symbol"]  # Ejemplo: SOLUSDT_UMCBL
     except Exception as e:
         print("❌ Error obteniendo contratos:", str(e))
     return None
 
+# 🔐 Headers autenticados
 def auth_headers(method, endpoint, body=""):
     timestamp = str(int(time.time() * 1000))
     prehash = timestamp + method.upper() + endpoint + body
@@ -41,6 +46,7 @@ def auth_headers(method, endpoint, body=""):
         "Content-Type": "application/json"
     }
 
+# ✅ Crear orden de entrada
 def place_order(symbol, side):
     url = "/api/v2/mix/order/place-order"
     body = {
@@ -58,24 +64,7 @@ def place_order(symbol, side):
     resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
     print(f"🟢 ORDEN {side} → {resp.status_code}, {resp.text}")
 
-def place_close_order(symbol, side, size):
-    url = "/api/v2/mix/order/place-order"
-    body = {
-        "symbol": symbol,
-        "marginCoin": MARGIN_COIN,
-        "side": side,
-        "orderType": "market",
-        "size": str(size),
-        "timeInForceValue": "normal",
-        "productType": PRODUCT_TYPE,
-        "marginMode": "isolated",
-        "reduceOnly": True
-    }
-    json_body = json.dumps(body)
-    headers = auth_headers("POST", url, json_body)
-    resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
-    print(f"🔴 ORDEN CIERRE {side} → {resp.status_code}, {resp.text}")
-
+# ❌ Cerrar posiciones
 def close_positions(symbol):
     print("🔄 Señal de cierre recibida.")
     endpoint = f"/api/mix/v1/position/singlePosition"
@@ -108,48 +97,16 @@ def close_positions(symbol):
     except Exception as e:
         print("❌ Error interpretando posición:", str(e))
 
-def list_all_positions():
-    endpoint = "/api/mix/v1/position/allPosition"
-    headers = auth_headers("GET", endpoint)
-    print(f"📡 Llamando a endpoint: {endpoint}")
-    resp = requests.get(BASE_URL + endpoint, headers=headers)
-    if resp.status_code != 200:
-        print(f"❌ Error listando posiciones: {resp.status_code} - {resp.text}")
-        return None
-    data = resp.json()
-    return data.get("data")
-
-@app.route("/", methods=["POST"])
-def webhook():
-    data = request.json
-    print("📨 Payload recibido:", data)
-    signal = data.get("signal")
-    raw_symbol = data.get("symbol", "").upper()
-
-    if signal == "LIST_POSITIONS" and raw_symbol == "ALL":
-        posiciones = list_all_positions()
-        print(f"📋 Posiciones abiertas: {posiciones}")
-        return json.dumps({"positions": posiciones}), 200
-
-    real_symbol = get_valid_symbol(raw_symbol)
-    if not real_symbol:
-        print(f"❌ Símbolo no válido: {raw_symbol}")
-        return "Invalid symbol", 400
-
-    print(f"✅ Símbolo real encontrado: {real_symbol}")
-
-    if signal == "ENTRY_LONG":
-        print("🚀 Entrada LONG")
-        place_order(real_symbol, "BUY")
-    elif signal == "ENTRY_SHORT":
-        print("📉 Entrada SHORT")
-        place_order(real_symbol, "SELL")
-    elif signal and signal.startswith("EXIT"):
-        close_positions(real_symbol)
-    else:
-        print("⚠️ Señal desconocida:", signal)
-
-    return "OK", 200
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+# 🧨 Orden de cierre
+def place_close_order(symbol, side, size):
+    url = "/api/v2/mix/order/place-order"
+    body = {
+        "symbol": symbol,
+        "marginCoin": MARGIN_COIN,
+        "side": side,
+        "orderType": "market",
+        "size": str(size),
+        "timeInForceValue": "normal",
+        "productType": PRODUCT_TYPE,
+        "marginMode": "isolated",
+        "reduceOnly
