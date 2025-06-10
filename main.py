@@ -16,7 +16,7 @@ BASE_URL = "https://api.bitget.com"
 PRODUCT_TYPE = "USDT-FUTURES"
 MARGIN_COIN = "USDT"
 
-# Obtener símbolo real (ej: SOLUSDT_UMCBL)
+# Obtener símbolo real como lo usa Bitget (ej: SOLUSDT_UMCBL)
 def get_valid_symbol(input_symbol):
     try:
         url = f"{BASE_URL}/api/v2/mix/market/contracts"
@@ -24,12 +24,12 @@ def get_valid_symbol(input_symbol):
         contracts = resp.json().get("data", [])
         for c in contracts:
             if c["symbol"].startswith(input_symbol):
-                return c["symbol"]
+                return c["symbol"]  # Ejemplo: SOLUSDT_UMCBL
     except Exception as e:
         print("❌ Error obteniendo contratos:", str(e))
     return None
 
-# Headers autenticación
+# Headers de autenticación
 def auth_headers(method, endpoint, body=""):
     timestamp = str(int(time.time() * 1000))
     prehash = timestamp + method.upper() + endpoint + body
@@ -43,7 +43,7 @@ def auth_headers(method, endpoint, body=""):
         "Content-Type": "application/json"
     }
 
-# Crear orden (entrada)
+# Crear orden de entrada
 def place_order(symbol, side):
     url = "/api/v2/mix/order/place-order"
     body = {
@@ -111,30 +111,27 @@ def close_positions(symbol):
     except Exception as e:
         print("❌ Error interpretando posición:", str(e))
 
-# Listar posiciones abiertas para un símbolo
-def list_positions_for_symbol(symbol):
-    endpoint = f"/api/mix/v1/position/openPositions?symbol={symbol}&marginCoin={MARGIN_COIN}"
+# Listar todas las posiciones abiertas (sin parámetros)
+def list_all_positions():
+    endpoint = "/api/mix/v1/position/positions"
     headers = auth_headers("GET", endpoint)
     print(f"📡 Llamando a endpoint: {endpoint}")
     resp = requests.get(BASE_URL + endpoint, headers=headers)
     if resp.status_code != 200:
-        print(f"❌ Error listando posiciones para {symbol}: {resp.status_code} - {resp.text}")
+        print(f"❌ Error listando posiciones: {resp.status_code} - {resp.text}")
         return None
-    return resp.json()
+    data = resp.json()
+    return data.get("data", [])
 
-# Listar todas las posiciones abiertas iterando por símbolos válidos
-def list_all_positions():
-    url = f"{BASE_URL}/api/v2/mix/market/contracts"
-    resp = requests.get(url, params={"productType": PRODUCT_TYPE})
-    contracts = resp.json().get("data", [])
-    positions = []
-    for c in contracts:
-        pos = list_positions_for_symbol(c["symbol"])
-        if pos and pos.get("data"):
-            positions.append({c["symbol"]: pos["data"]})
-    return positions
+# Listar posiciones filtradas por símbolo
+def list_positions_for_symbol(symbol):
+    all_positions = list_all_positions()
+    if all_positions is None:
+        return None
+    filtered = [pos for pos in all_positions if pos.get("symbol") == symbol]
+    return filtered
 
-# Webhook endpoint
+# Webhook principal
 @app.route("/", methods=["POST"])
 def webhook():
     data = request.json
@@ -154,6 +151,7 @@ def webhook():
         print("📋 Posiciones abiertas:", positions)
         return "OK", 200
 
+    # Para señales de trading
     real_symbol = get_valid_symbol(raw_symbol)
     if not real_symbol:
         print(f"❌ Símbolo no válido: {raw_symbol}")
