@@ -135,13 +135,3 @@ def webhook():
         place_order(real_symbol, "BUY")
     elif signal == "ENTRY_SHORT":
         print("📉 Entrada SHORT")
-        place_order(real_symbol, "SELL")
-    elif signal and signal.startswith("EXIT"):
-        close_positions(real_symbol)
-    else:
-        print("⚠️ Señal desconocida:", signal)
-
-    return "OK", 200
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
