@@ -16,7 +16,6 @@ BASE_URL = "https://api.bitget.com"
 PRODUCT_TYPE = "USDT-FUTURES"
 MARGIN_COIN = "USDT"
 
-# Obtener símbolo válido
 def get_valid_symbol(input_symbol):
     try:
         url = f"{BASE_URL}/api/v2/mix/market/contracts"
@@ -29,7 +28,6 @@ def get_valid_symbol(input_symbol):
         print("❌ Error obteniendo contratos:", str(e))
     return None
 
-# Headers autenticados
 def auth_headers(method, endpoint, body=""):
     timestamp = str(int(time.time() * 1000))
     prehash = timestamp + method.upper() + endpoint + body
@@ -43,7 +41,6 @@ def auth_headers(method, endpoint, body=""):
         "Content-Type": "application/json"
     }
 
-# Crear orden mercado (entrada)
 def place_order(symbol, side):
     url = "/api/v2/mix/order/place-order"
     body = {
@@ -61,7 +58,6 @@ def place_order(symbol, side):
     resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
     print(f"🟢 ORDEN {side} → {resp.status_code}, {resp.text}")
 
-# Orden cierre mercado (reduceOnly)
 def place_close_order(symbol, side, size):
     url = "/api/v2/mix/order/place-order"
     body = {
@@ -80,10 +76,12 @@ def place_close_order(symbol, side, size):
     resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
     print(f"🔴 ORDEN CIERRE {side} → {resp.status_code}, {resp.text}")
 
-# Cerrar posiciones abiertas
 def close_positions(symbol):
     print("🔄 Señal de cierre recibida.")
-    full_endpoint = f"/api/v2/mix/position/single-position?symbol={symbol}&marginCoin={MARGIN_COIN}"
+    # OJO: Quitamos marginCoin para evitar error 400172
+    full_endpoint = f"/api/v2/mix/position/single-position?symbol={symbol}"
+    print(f"📡 Llamando a endpoint: {full_endpoint}")
+
     headers = auth_headers("GET", full_endpoint)
     resp = requests.get(BASE_URL + full_endpoint, headers=headers)
 
@@ -119,7 +117,6 @@ def close_positions(symbol):
     except Exception as e:
         print("❌ Error interpretando posición:", str(e))
 
-# Webhook receptor
 @app.route("/", methods=["POST"])
 def webhook():
     data = request.json
