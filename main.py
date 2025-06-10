@@ -9,17 +9,14 @@ from flask import Flask, request
 
 app = Flask(__name__)
 
-# Claves desde variables de entorno (nunca las pongas directo en código)
 API_KEY = os.getenv("BITGET_API_KEY")
 API_SECRET = os.getenv("BITGET_API_SECRET")
 API_PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
 BASE_URL = "https://api.bitget.com"
-
-# Constantes para Futuros USDT
 PRODUCT_TYPE = "USDT-FUTURES"
 MARGIN_COIN = "USDT"
 
-# ✅ Obtener el símbolo real desde Bitget
+# ✅ Obtener símbolo real como lo usa Bitget
 def get_valid_symbol(input_symbol):
     try:
         url = f"{BASE_URL}/api/v2/mix/market/contracts"
@@ -27,12 +24,12 @@ def get_valid_symbol(input_symbol):
         contracts = resp.json().get("data", [])
         for c in contracts:
             if c["symbol"].startswith(input_symbol):
-                return c["symbol"]  # Ejemplo: SOLUSDT_UMCBL
+                return c["symbol"]
     except Exception as e:
         print("❌ Error obteniendo contratos:", str(e))
     return None
 
-# 🔐 Headers autenticados
+# 🔐 Headers de autenticación
 def auth_headers(method, endpoint, body=""):
     timestamp = str(int(time.time() * 1000))
     prehash = timestamp + method.upper() + endpoint + body
@@ -109,4 +106,67 @@ def place_close_order(symbol, side, size):
         "timeInForceValue": "normal",
         "productType": PRODUCT_TYPE,
         "marginMode": "isolated",
-        "reduceOnly
+        "reduceOnly": True
+    }
+    json_body = json.dumps(body)
+    headers = auth_headers("POST", url, json_body)
+    resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
+    print(f"🔴 ORDEN CIERRE {side} → {resp.status_code}, {resp.text}")
+
+# 🧾 Listar posiciones abiertas
+def list_positions(symbol):
+    if symbol != "ALL":
+        real_symbol = get_valid_symbol(symbol)
+        if not real_symbol:
+            print(f"❌ Símbolo no válido: {symbol}")
+            return None
+        endpoint = f"/api/mix/v1/position/singlePosition?symbol={real_symbol}&marginCoin={MARGIN_COIN}"
+    else:
+        endpoint = f"/api/mix/v1/position/allPosition?productType={PRODUCT_TYPE}"
+
+    headers = auth_headers("GET", endpoint)
+    print(f"📡 Llamando a endpoint: {endpoint}")
+    resp = requests.get(BASE_URL + endpoint, headers=headers)
+    if resp.status_code != 200:
+        print(f"❌ Error listando posiciones: {resp.status_code} - {resp.text}")
+        return None
+
+    data = resp.json().get("data", None)
+    print("📋 Posiciones abiertas:", json.dumps(data, indent=2))
+    return data
+
+# 🌐 Webhook principal
+@app.route("/", methods=["POST"])
+def webhook():
+    data = request.json
+    print("📨 Payload recibido:", data)
+    signal = data.get("signal")
+    raw_symbol = data.get("symbol", "").upper()
+
+    if signal == "LIST_POSITIONS":
+        list_positions(raw_symbol)
+        return "OK", 200
+
+    real_symbol = get_valid_symbol(raw_symbol)
+    if not real_symbol:
+        print(f"❌ Símbolo real no encontrado: {raw_symbol}")
+        return "Invalid symbol", 400
+
+    print(f"✅ Símbolo real encontrado: {real_symbol}")
+
+    if signal == "ENTRY_LONG":
+        print("🚀 Entrada LONG")
+        place_order(real_symbol, "BUY")
+    elif signal == "ENTRY_SHORT":
+        print("📉 Entrada SHORT")
+        place_order(real_symbol, "SELL")
+    elif signal and signal.startswith("EXIT"):
+        close_positions(real_symbol)
+    else:
+        print("⚠️ Señal desconocida:", signal)
+
+    return "OK", 200
+
+# 🟢 Ejecutar app Flask
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
