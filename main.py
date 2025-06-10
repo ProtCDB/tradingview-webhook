@@ -1,147 +1,135 @@
+import os
 import json
-import time
+from flask import Flask, request, jsonify
+import requests
 import hmac
 import hashlib
-import requests
-from flask import Flask, request, jsonify
+import time
 
 app = Flask(__name__)
 
-API_KEY = "TU_API_KEY"
-API_SECRET = "TU_API_SECRET"
-API_PASS = "TU_API_PASSPHRASE"
-BASE_URL = "https://api.bitget.com"
-MARGIN_COIN = "USDT"
+# Leer las claves de entorno (evita hardcodear en github)
+API_KEY = os.getenv("API_KEY")
+API_SECRET = os.getenv("API_SECRET")
 
-# ---------------------- FIRMA ----------------------
-def get_timestamp():
-    return str(int(time.time() * 1000))
+BASE_URL = "https://contract.mexc.com"
 
-def sign_request(method, endpoint, timestamp, body=""):
-    prehash = timestamp + method.upper() + endpoint + body
-    return hmac.new(
-        API_SECRET.encode(),
-        prehash.encode(),
-        hashlib.sha256
-    ).hexdigest()
+def sign(params: dict, secret: str):
+    qs = '&'.join([f"{key}={params[key]}" for key in sorted(params)])
+    return hmac.new(secret.encode(), qs.encode(), hashlib.sha256).hexdigest()
 
-# ---------------------- FUNCIONES API ----------------------
-def send_order(symbol, side):
-    endpoint = "/api/mix/v1/order/place-order"
-    url = BASE_URL + endpoint
+def call_api(method, path, params=None):
+    if params is None:
+        params = {}
+    timestamp = int(time.time() * 1000)
+    params['api_key'] = API_KEY
+    params['req_time'] = timestamp
+    params['sign'] = sign(params, API_SECRET)
 
-    body = {
-        "symbol": symbol,
-        "marginCoin": MARGIN_COIN,
-        "side": side,
-        "orderType": "market",
-        "size": "0.1",
-        "tradeSide": "open"
-    }
+    url = BASE_URL + path
+    headers = {"Content-Type": "application/json"}
 
-    timestamp = get_timestamp()
-    signature = sign_request("POST", endpoint, timestamp, json.dumps(body))
-
-    headers = {
-        "ACCESS-KEY": API_KEY,
-        "ACCESS-SIGN": signature,
-        "ACCESS-TIMESTAMP": timestamp,
-        "ACCESS-PASSPHRASE": API_PASS,
-        "Content-Type": "application/json"
-    }
-
-    response = requests.post(url, headers=headers, data=json.dumps(body))
-    print(f"🟢 ORDEN {side.upper()} → {response.status_code}, {response.text}")
-    return response
-
-def close_position(symbol):
-    endpoint = "/api/mix/v1/position/singlePosition"
-    query = f"symbol={symbol}&marginCoin={MARGIN_COIN}"
-    url = BASE_URL + endpoint + "?" + query
-
-    timestamp = get_timestamp()
-    signature = sign_request("GET", endpoint + "?" + query, timestamp)
-
-    headers = {
-        "ACCESS-KEY": API_KEY,
-        "ACCESS-SIGN": signature,
-        "ACCESS-TIMESTAMP": timestamp,
-        "ACCESS-PASSPHRASE": API_PASS,
-        "Content-Type": "application/json"
-    }
-
-    response = requests.get(url, headers=headers)
-    print(f"📡 Llamando a endpoint: {endpoint}?{query}")
+    if method == 'GET':
+        response = requests.get(url, params=params, headers=headers)
+    else:  # POST
+        response = requests.post(url, json=params, headers=headers)
 
     if response.status_code != 200:
-        print(f"❌ Error al obtener posición: Status {response.status_code} - {response.text}")
-        return
+        raise Exception(f"Status {response.status_code} - {response.text}")
 
+    return response.json()
+
+def get_real_symbol(symbol):
+    # Aquí podemos ajustar si hace falta alguna conversión,
+    # o devolver directamente el símbolo sin modificar.
+    # Por ahora devolvemos tal cual:
+    return symbol
+
+@app.route("/", methods=["POST"])
+def webhook():
     try:
-        data = response.json().get("data")
-        if not data or float(data.get("total", 0)) == 0:
-            print("⚠️ No hay posición abierta para cerrar.")
-            return
+        data = request.json
+        signal = data.get("signal")
+        symbol = data.get("symbol")
 
-        side = "close_long" if data["holdSide"] == "long" else "close_short"
+        if not API_KEY or not API_SECRET:
+            return jsonify({"error": "API_KEY o API_SECRET no configurados en variables de entorno"}), 500
 
-        order_body = {
-            "symbol": symbol,
-            "marginCoin": MARGIN_COIN,
-            "side": "sell" if side == "close_long" else "buy",
-            "orderType": "market",
-            "size": data["total"],
-            "tradeSide": side
-        }
+        if not signal or not symbol:
+            return jsonify({"error": "Faltan parámetros 'signal' o 'symbol'"}), 400
 
-        close_endpoint = "/api/mix/v1/order/place-order"
-        url = BASE_URL + close_endpoint
+        real_symbol = get_real_symbol(symbol)
+        print(f"📨 Payload recibido: {data}")
+        print(f"✅ Símbolo real encontrado: {real_symbol}")
 
-        timestamp = get_timestamp()
-        signature = sign_request("POST", close_endpoint, timestamp, json.dumps(order_body))
+        if signal == "LIST_POSITIONS":
+            # Llamamos al endpoint para obtener posiciones abiertas
+            try:
+                # La documentación sugiere este endpoint para posiciones abiertas
+                path = "/api/v2/mix/position/open_positions"
+                params = {"marginCoin": "USDT", "api_key": API_KEY, "req_time": int(time.time() * 1000)}
+                params['sign'] = sign(params, API_SECRET)
+                url = BASE_URL + path
+                response = requests.get(url, params=params)
+                if response.status_code != 200:
+                    return jsonify({"error": f"Status {response.status_code} - {response.text}"}), 500
+                resp_json = response.json()
+                print(f"📋 Posiciones abiertas: {resp_json}")
+                return jsonify(resp_json)
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
 
-        headers["ACCESS-SIGN"] = signature
-        headers["ACCESS-TIMESTAMP"] = timestamp
+        elif signal == "ENTRY_LONG":
+            print("🚀 Entrada LONG")
+            # Ejemplo simple de orden compra market
+            path = "/api/v1/mix/order/place"
+            params = {
+                "symbol": real_symbol,
+                "price": 0,
+                "vol": 1,
+                "side": 1,  # 1=buy long
+                "type": 1,  # 1=market order
+                "open_type": 1,
+                "position_id": 0,
+                "leverage": 10,
+                "external_oid": str(int(time.time() * 1000))
+            }
+            params['api_key'] = API_KEY
+            params['req_time'] = int(time.time() * 1000)
+            params['sign'] = sign(params, API_SECRET)
+            response = requests.post(BASE_URL + path, json=params)
+            resp_json = response.json()
+            print(f"🟢 ORDEN BUY → {resp_json}")
+            return jsonify(resp_json)
 
-        close_response = requests.post(url, headers=headers, data=json.dumps(order_body))
-        print(f"🔁 Orden de cierre enviada: {close_response.status_code}, {close_response.text}")
+        elif signal == "EXIT_CONFIRMED":
+            print("🔄 Señal de cierre recibida.")
+            # Llamar endpoint para obtener posición y cerrar
+            try:
+                path = "/api/v1/mix/position/singlePosition"
+                params = {"symbol": real_symbol, "marginCoin": "USDT"}
+                params['api_key'] = API_KEY
+                params['req_time'] = int(time.time() * 1000)
+                params['sign'] = sign(params, API_SECRET)
+                url = BASE_URL + path
+                response = requests.get(url, params=params)
+                if response.status_code != 200:
+                    return jsonify({"error": f"Status {response.status_code} - {response.text}"}), 500
+                position_info = response.json()
+                print(f"📡 Posición obtenida: {position_info}")
+                # Aquí agregar lógica para cerrar posición según info recibida
+                # Por ejemplo, orden de venta si posición long abierta, etc.
+                # Por simplificar, respondemos con la info:
+                return jsonify(position_info)
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
+        else:
+            return jsonify({"error": "Señal no soportada"}), 400
 
     except Exception as e:
-        print(f"❌ Error interpretando posición: {e}")
+        print(f"Error en webhook: {e}")
+        return jsonify({"error": str(e)}), 500
 
-# ---------------------- FLASK WEBHOOK ----------------------
-@app.route('/', methods=['POST'])
-def webhook():
-    data = request.get_json()
-    print(f"\ud83d\udce8 Payload recibido: {data}")
-
-    signal = data.get("signal")
-    symbol = data.get("symbol")
-
-    if not symbol:
-        return jsonify({"error": "Símbolo no proporcionado"}), 400
-
-    print(f"✅ Símbolo recibido: {symbol}")
-
-    if signal == "ENTRY_LONG":
-        print("\ud83d\ude80 Entrada LONG")
-        return jsonify(send_order(symbol, "buy").json())
-
-    elif signal == "ENTRY_SHORT":
-        print("\ud83d\udcc9 Entrada SHORT")
-        return jsonify(send_order(symbol, "sell").json())
-
-    elif signal == "EXIT_CONFIRMED":
-        print("\ud83d\udd04 Se\u00f1al de cierre recibida.")
-        close_position(symbol)
-        return jsonify({"status": "Cierre intentado"})
-
-    elif signal == "LIST_POSITIONS":
-        print("\ud83d\udccb Listar posiciones abiertas no implementado.")
-        return jsonify({"status": "No implementado"})
-
-    return jsonify({"error": "Se\u00f1al no v\u00e1lida"}), 400
-
-# ---------------------- RUN ----------------------
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+if __name__ == "__main__":
+    app.run(debug=True)
