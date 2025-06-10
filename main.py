@@ -16,7 +16,6 @@ BASE_URL = "https://api.bitget.com"
 PRODUCT_TYPE = "USDT-FUTURES"
 MARGIN_COIN = "USDT"
 
-# Obtener símbolo real (ej: SOLUSDT_UMCBL)
 def get_valid_symbol(input_symbol):
     try:
         url = f"{BASE_URL}/api/v2/mix/market/contracts"
@@ -29,7 +28,6 @@ def get_valid_symbol(input_symbol):
         print("❌ Error obteniendo contratos:", str(e))
     return None
 
-# Headers de autenticación
 def auth_headers(method, endpoint, body=""):
     timestamp = str(int(time.time() * 1000))
     prehash = timestamp + method.upper() + endpoint + body
@@ -43,7 +41,6 @@ def auth_headers(method, endpoint, body=""):
         "Content-Type": "application/json"
     }
 
-# Crear orden de entrada
 def place_order(symbol, side):
     url = "/api/v2/mix/order/place-order"
     body = {
@@ -61,7 +58,6 @@ def place_order(symbol, side):
     resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
     print(f"🟢 ORDEN {side} → {resp.status_code}, {resp.text}")
 
-# Orden de cierre
 def place_close_order(symbol, side, size):
     url = "/api/v2/mix/order/place-order"
     body = {
@@ -80,15 +76,12 @@ def place_close_order(symbol, side, size):
     resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
     print(f"🔴 ORDEN CIERRE {side} → {resp.status_code}, {resp.text}")
 
-# Cerrar posiciones
 def close_positions(symbol):
     print("🔄 Señal de cierre recibida.")
-    endpoint = "/api/mix/v1/position/singlePosition"
-    params = f"?symbol={symbol}&marginCoin={MARGIN_COIN}"
-    full_endpoint = endpoint + params
-    headers = auth_headers("GET", full_endpoint)
-    print(f"📡 Llamando a endpoint: {full_endpoint}")
-    resp = requests.get(BASE_URL + full_endpoint, headers=headers)
+    endpoint = f"/api/v1/mix/position/singlePosition?symbol={symbol}"
+    headers = auth_headers("GET", endpoint)
+    print(f"📡 Llamando a endpoint: {endpoint}")
+    resp = requests.get(BASE_URL + endpoint, headers=headers)
 
     if resp.status_code != 200:
         print(f"❌ Error al obtener posición: Status {resp.status_code} - {resp.text}")
@@ -113,9 +106,8 @@ def close_positions(symbol):
     except Exception as e:
         print("❌ Error interpretando posición:", str(e))
 
-# Listar todas las posiciones abiertas
 def list_all_positions():
-    endpoint = "/api/mix/v1/position/openPositions"
+    endpoint = "/api/v1/mix/position/allPosition"
     headers = auth_headers("GET", endpoint)
     print(f"📡 Llamando a endpoint: {endpoint}")
     resp = requests.get(BASE_URL + endpoint, headers=headers)
@@ -125,15 +117,18 @@ def list_all_positions():
     data = resp.json()
     return data.get("data", [])
 
-# Filtrar posiciones por símbolo
 def list_positions_for_symbol(symbol):
-    all_positions = list_all_positions()
-    if all_positions is None:
+    endpoint = f"/api/v1/mix/position/singlePosition?symbol={symbol}"
+    headers = auth_headers("GET", endpoint)
+    print(f"📡 Llamando a endpoint: {endpoint}")
+    resp = requests.get(BASE_URL + endpoint, headers=headers)
+    if resp.status_code != 200:
+        print(f"❌ Error listando posiciones para {symbol}: {resp.status_code} - {resp.text}")
         return None
-    filtered = [pos for pos in all_positions if pos.get("symbol", "").startswith(symbol)]
-    return filtered
+    data = resp.json()
+    pos = data.get("data")
+    return [pos] if pos else []
 
-# Webhook principal
 @app.route("/", methods=["POST"])
 def webhook():
     data = request.json
@@ -145,10 +140,13 @@ def webhook():
         if raw_symbol == "ALL":
             positions = list_all_positions()
         else:
-            positions = list_positions_for_symbol(raw_symbol)
-
-        print(f"📋 Posiciones abiertas: {positions}")
-        return json.dumps(positions), 200
+            valid_symbol = get_valid_symbol(raw_symbol)
+            if not valid_symbol:
+                print(f"❌ Símbolo no válido para listado: {raw_symbol}")
+                return "Invalid symbol", 400
+            positions = list_positions_for_symbol(valid_symbol)
+        print("📋 Posiciones abiertas:", json.dumps(positions, indent=2))
+        return "OK", 200
 
     real_symbol = get_valid_symbol(raw_symbol)
     if not real_symbol:
