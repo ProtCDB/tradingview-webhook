@@ -23,7 +23,7 @@ def get_valid_symbol(input_symbol):
         contracts = resp.json().get("data", [])
         for c in contracts:
             if c["symbol"].startswith(input_symbol):
-                return c["symbol"]  # Ejemplo: SOLUSDT_UMCBL
+                return c["symbol"]
     except Exception as e:
         print("❌ Error obteniendo contratos:", str(e))
     return None
@@ -78,10 +78,12 @@ def place_close_order(symbol, side, size):
 
 def close_positions(symbol):
     print("🔄 Señal de cierre recibida.")
-    endpoint = f"/api/v1/mix/position/singlePosition?symbol={symbol}"
-    headers = auth_headers("GET", endpoint)
-    print(f"📡 Llamando a endpoint: {endpoint}")
-    resp = requests.get(BASE_URL + endpoint, headers=headers)
+    endpoint = f"/api/mix/v1/position/singlePosition"
+    params = f"?symbol={symbol}&marginCoin={MARGIN_COIN}"
+    full_endpoint = endpoint + params
+    headers = auth_headers("GET", full_endpoint)
+    print(f"📡 Llamando a endpoint: {full_endpoint}")
+    resp = requests.get(BASE_URL + full_endpoint, headers=headers)
 
     if resp.status_code != 200:
         print(f"❌ Error al obtener posición: Status {resp.status_code} - {resp.text}")
@@ -107,7 +109,7 @@ def close_positions(symbol):
         print("❌ Error interpretando posición:", str(e))
 
 def list_all_positions():
-    endpoint = "/api/v1/mix/position/allPosition"
+    endpoint = "/api/mix/v1/position/openPositions"
     headers = auth_headers("GET", endpoint)
     print(f"📡 Llamando a endpoint: {endpoint}")
     resp = requests.get(BASE_URL + endpoint, headers=headers)
@@ -115,19 +117,7 @@ def list_all_positions():
         print(f"❌ Error listando posiciones: {resp.status_code} - {resp.text}")
         return None
     data = resp.json()
-    return data.get("data", [])
-
-def list_positions_for_symbol(symbol):
-    endpoint = f"/api/v1/mix/position/singlePosition?symbol={symbol}"
-    headers = auth_headers("GET", endpoint)
-    print(f"📡 Llamando a endpoint: {endpoint}")
-    resp = requests.get(BASE_URL + endpoint, headers=headers)
-    if resp.status_code != 200:
-        print(f"❌ Error listando posiciones para {symbol}: {resp.status_code} - {resp.text}")
-        return None
-    data = resp.json()
-    pos = data.get("data")
-    return [pos] if pos else []
+    return data.get("data")
 
 @app.route("/", methods=["POST"])
 def webhook():
@@ -136,17 +126,10 @@ def webhook():
     signal = data.get("signal")
     raw_symbol = data.get("symbol", "").upper()
 
-    if signal == "LIST_POSITIONS":
-        if raw_symbol == "ALL":
-            positions = list_all_positions()
-        else:
-            valid_symbol = get_valid_symbol(raw_symbol)
-            if not valid_symbol:
-                print(f"❌ Símbolo no válido para listado: {raw_symbol}")
-                return "Invalid symbol", 400
-            positions = list_positions_for_symbol(valid_symbol)
-        print("📋 Posiciones abiertas:", json.dumps(positions, indent=2))
-        return "OK", 200
+    if signal == "LIST_POSITIONS" and raw_symbol == "ALL":
+        posiciones = list_all_positions()
+        print(f"📋 Posiciones abiertas: {posiciones}")
+        return json.dumps({"positions": posiciones}), 200
 
     real_symbol = get_valid_symbol(raw_symbol)
     if not real_symbol:
