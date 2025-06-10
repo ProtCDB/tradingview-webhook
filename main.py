@@ -1,172 +1,87 @@
-import os
 import json
+import requests
+import time
 import hmac
 import hashlib
-import base64
-import time
-import requests
-from flask import Flask, request
 
-app = Flask(__name__)
-
-API_KEY = os.getenv("BITGET_API_KEY")
-API_SECRET = os.getenv("BITGET_API_SECRET")
-API_PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
+# Configuraciones base
 BASE_URL = "https://api.bitget.com"
+API_KEY = "TU_API_KEY"
+API_SECRET = "TU_API_SECRET"
+API_PASSPHRASE = "TU_PASSPHRASE"
 PRODUCT_TYPE = "USDT-FUTURES"
 MARGIN_COIN = "USDT"
 
-# ✅ Obtener símbolo real como lo usa Bitget
-def get_valid_symbol(input_symbol):
-    try:
-        url = f"{BASE_URL}/api/v2/mix/market/contracts"
-        resp = requests.get(url, params={"productType": PRODUCT_TYPE})
-        contracts = resp.json().get("data", [])
-        for c in contracts:
-            if c["symbol"].startswith(input_symbol):
-                return c["symbol"]
-    except Exception as e:
-        print("❌ Error obteniendo contratos:", str(e))
-    return None
-
-# 🔐 Headers de autenticación
-def auth_headers(method, endpoint, body=""):
+# Función para generar headers autenticados
+def auth_headers(method, endpoint, body=''):
     timestamp = str(int(time.time() * 1000))
     prehash = timestamp + method.upper() + endpoint + body
-    sign = hmac.new(API_SECRET.encode(), prehash.encode(), hashlib.sha256).digest()
-    signature = base64.b64encode(sign).decode()
+    signature = hmac.new(API_SECRET.encode(), prehash.encode(), hashlib.sha256).hexdigest()
+
     return {
-        "ACCESS-KEY": API_KEY,
-        "ACCESS-SIGN": signature,
-        "ACCESS-TIMESTAMP": timestamp,
-        "ACCESS-PASSPHRASE": API_PASSPHRASE,
-        "Content-Type": "application/json"
+        'ACCESS-KEY': API_KEY,
+        'ACCESS-SIGN': signature,
+        'ACCESS-TIMESTAMP': timestamp,
+        'ACCESS-PASSPHRASE': API_PASSPHRASE,
+        'Content-Type': 'application/json'
     }
 
-# ✅ Crear orden de entrada
-def place_order(symbol, side):
-    url = "/api/v2/mix/order/place-order"
-    body = {
-        "symbol": symbol,
-        "marginCoin": MARGIN_COIN,
-        "side": side,
-        "orderType": "market",
-        "size": "1",
-        "timeInForceValue": "normal",
-        "productType": PRODUCT_TYPE,
-        "marginMode": "isolated"
-    }
-    json_body = json.dumps(body)
-    headers = auth_headers("POST", url, json_body)
-    resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
-    print(f"🟢 ORDEN {side} → {resp.status_code}, {resp.text}")
-
-# ❌ Cerrar posiciones
-def close_positions(symbol):
-    print("🔄 Señal de cierre recibida.")
-    endpoint = f"/api/mix/v1/position/singlePosition"
-    params = f"?symbol={symbol}&marginCoin={MARGIN_COIN}"
-    full_endpoint = endpoint + params
-    headers = auth_headers("GET", full_endpoint)
-    print(f"📡 Llamando a endpoint: {full_endpoint}")
-    resp = requests.get(BASE_URL + full_endpoint, headers=headers)
-
-    if resp.status_code != 200:
-        print(f"❌ Error al obtener posición: Status {resp.status_code} - {resp.text}")
-        return
-
-    data = resp.json()
-    position = data.get("data")
-    if not position:
-        print("⚠️ No hay posición abierta para cerrar.")
-        return
-
+# Obtener símbolo real
+def get_real_symbol(symbol: str):
     try:
-        long_pos = float(position.get("long", {}).get("available", 0))
-        short_pos = float(position.get("short", {}).get("available", 0))
+        endpoint = f"/api/v2/mix/market/contracts?productType={PRODUCT_TYPE}"
+        headers = auth_headers("GET", endpoint)
+        url = BASE_URL + endpoint
+        resp = requests.get(url, headers=headers)
 
-        if long_pos > 0:
-            print("🔴 Cerrando LONG...")
-            place_close_order(symbol, "SELL", long_pos)
-        if short_pos > 0:
-            print("🔴 Cerrando SHORT...")
-            place_close_order(symbol, "BUY", short_pos)
+        if resp.status_code == 200:
+            contracts = resp.json().get("data", [])
+            for contract in contracts:
+                if contract["symbol"].startswith(symbol.upper()):
+                    return contract["symbol"]
+        return None
     except Exception as e:
-        print("❌ Error interpretando posición:", str(e))
-
-# 🧨 Orden de cierre
-def place_close_order(symbol, side, size):
-    url = "/api/v2/mix/order/place-order"
-    body = {
-        "symbol": symbol,
-        "marginCoin": MARGIN_COIN,
-        "side": side,
-        "orderType": "market",
-        "size": str(size),
-        "timeInForceValue": "normal",
-        "productType": PRODUCT_TYPE,
-        "marginMode": "isolated",
-        "reduceOnly": True
-    }
-    json_body = json.dumps(body)
-    headers = auth_headers("POST", url, json_body)
-    resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
-    print(f"🔴 ORDEN CIERRE {side} → {resp.status_code}, {resp.text}")
-
-# 🧾 Listar posiciones abiertas
-def list_positions(symbol):
-    if symbol != "ALL":
-        real_symbol = get_valid_symbol(symbol)
-        if not real_symbol:
-            print(f"❌ Símbolo no válido: {symbol}")
-            return None
-        endpoint = f"/api/mix/v1/position/singlePosition?symbol={real_symbol}&marginCoin={MARGIN_COIN}"
-    else:
-        endpoint = f"/api/mix/v1/position/allPosition?productType={PRODUCT_TYPE}"
-
-    headers = auth_headers("GET", endpoint)
-    print(f"📡 Llamando a endpoint: {endpoint}")
-    resp = requests.get(BASE_URL + endpoint, headers=headers)
-    if resp.status_code != 200:
-        print(f"❌ Error listando posiciones: {resp.status_code} - {resp.text}")
+        print(f"❌ Error al obtener símbolo real: {e}")
         return None
 
-    data = resp.json().get("data", None)
-    print("📋 Posiciones abiertas:", json.dumps(data, indent=2))
-    return data
+# Listar posiciones
+def list_positions(symbol: str):
+    try:
+        print(f"📨 Payload recibido: {{'signal': 'LIST_POSITIONS', 'symbol': '{symbol}'}}")
 
-# 🌐 Webhook principal
-@app.route("/", methods=["POST"])
-def webhook():
-    data = request.json
-    print("📨 Payload recibido:", data)
-    signal = data.get("signal")
-    raw_symbol = data.get("symbol", "").upper()
+        if symbol != "ALL":
+            real_symbol = get_real_symbol(symbol)
+            if not real_symbol:
+                print(f"❌ No se pudo encontrar un símbolo válido para {symbol}")
+                return None
 
-    if signal == "LIST_POSITIONS":
-        list_positions(raw_symbol)
-        return "OK", 200
+            print(f"✅ Símbolo real encontrado: {real_symbol}")
+            endpoint = f"/api/mix/v1/position/singlePosition?symbol={real_symbol}&marginCoin={MARGIN_COIN}"
+            headers = auth_headers("GET", endpoint)
+            print(f"📡 Llamando a endpoint: {endpoint}")
+            resp = requests.get(BASE_URL + endpoint, headers=headers)
+        else:
+            endpoint = "/api/mix/v1/position/allPosition"
+            body = {
+                "productType": PRODUCT_TYPE
+            }
+            json_body = json.dumps(body)
+            headers = auth_headers("POST", endpoint, json_body)
+            print(f"📡 Llamando a endpoint: {endpoint}")
+            resp = requests.post(BASE_URL + endpoint, headers=headers, data=json_body)
 
-    real_symbol = get_valid_symbol(raw_symbol)
-    if not real_symbol:
-        print(f"❌ Símbolo real no encontrado: {raw_symbol}")
-        return "Invalid symbol", 400
+        if resp.status_code == 200:
+            positions = resp.json().get("data", [])
+            print(f"📋 Posiciones abiertas: {positions}")
+            return positions
+        else:
+            print(f"❌ Error listando posiciones: {resp.status_code} - {resp.text}")
+            return None
+    except Exception as e:
+        print(f"❌ Excepción al listar posiciones: {e}")
+        return None
 
-    print(f"✅ Símbolo real encontrado: {real_symbol}")
-
-    if signal == "ENTRY_LONG":
-        print("🚀 Entrada LONG")
-        place_order(real_symbol, "BUY")
-    elif signal == "ENTRY_SHORT":
-        print("📉 Entrada SHORT")
-        place_order(real_symbol, "SELL")
-    elif signal and signal.startswith("EXIT"):
-        close_positions(real_symbol)
-    else:
-        print("⚠️ Señal desconocida:", signal)
-
-    return "OK", 200
-
-# 🟢 Ejecutar app Flask
+# Ejemplo de uso
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    list_positions("SOLUSDT")
+    list_positions("ALL")
