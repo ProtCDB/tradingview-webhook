@@ -2,44 +2,50 @@ import os
 import time
 import hmac
 import hashlib
-import requests
 import logging
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+import uvicorn
+import requests
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("main")
 
+API_BASE = "https://api.bitget.com"
+API_KEY = os.getenv("API_KEY")
+API_SECRET = os.getenv("API_SECRET")
+API_PASSPHRASE = os.getenv("API_PASSPHRASE")
+
 app = FastAPI()
 
-API_BASE = "https://api.bitget.com"
-API_KEY = os.getenv("BITGET_API_KEY")
-API_SECRET = os.getenv("BITGET_API_SECRET")
-API_PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
-
-def get_timestamp_ms():
+def get_timestamp():
     return str(int(time.time() * 1000))
 
-def get_headers(method: str, request_path: str, body: str = ""):
-    timestamp = get_timestamp_ms()
-    pre_hash = timestamp + method.upper() + request_path + body
-    sign = hmac.new(API_SECRET.encode('utf-8'), pre_hash.encode('utf-8'), hashlib.sha256).hexdigest()
-    return {
+def sign(secret, timestamp, method, request_path, body=""):
+    # Para GET con query string, request_path incluye query params
+    message = timestamp + method.upper() + request_path + body
+    hmac_key = hmac.new(secret.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
+    return hmac_key.hexdigest()
+
+def get_headers(method, request_path, body=""):
+    timestamp = get_timestamp()
+    signature = sign(API_SECRET, timestamp, method, request_path, body)
+    headers = {
         "ACCESS-KEY": API_KEY,
-        "ACCESS-SIGN": sign,
+        "ACCESS-SIGN": signature,
         "ACCESS-TIMESTAMP": timestamp,
         "ACCESS-PASSPHRASE": API_PASSPHRASE,
         "Content-Type": "application/json"
     }
+    return headers
 
 def get_open_positions():
     try:
-        request_path = "/api/mix/v1/position/openPositions"
-        url = API_BASE + request_path
-        params = {"productType": "UMCBL"}  # Usa "UMCBL" para USDT-margined perpetual futures
-        headers = get_headers("GET", request_path)
-        logger.info(f"Consultando posiciones abiertas: {url} con params {params}")
-        resp = requests.get(url, headers=headers, params=params)
+        request_path = "/api/mix/v1/position/all-position"
+        query_string = "?productType=UMCBL"
+        url = API_BASE + request_path + query_string
+        headers = get_headers("GET", request_path + query_string)
+        logger.info(f"Consultando posiciones abiertas: {url}")
+        resp = requests.get(url, headers=headers)
         resp.raise_for_status()
         data = resp.json()
         if data.get("code") == "00000":
@@ -51,28 +57,36 @@ def get_open_positions():
         logger.error(f"❌ Excepción en get_open_positions: {e}")
         return []
 
-def close_position(symbol: str, hold_side: str):
+def close_position(symbol):
     try:
-        request_path = "/api/mix/v1/order/closePosition"
-        url = API_BASE + request_path
+        positions = get_open_positions()
+        # Buscar posición abierta para el símbolo dado
+        pos = next((p for p in positions if p.get("symbol") == symbol), None)
+        if not pos:
+            logger.warning(f"No hay posición abierta para {symbol} para cerrar")
+            return False
+
+        # Construir payload para cerrar la posición
         body = {
             "symbol": symbol,
-            "holdSide": hold_side,  # "long" o "short"
-            "marginCoin": "USDT"
+            "side": "close_long" if pos.get("holdSide") == "long" else "close_short",
+            "marginCoin": "USDT",
+            "positionId": pos.get("positionId"),
+            "productType": "UMCBL",
+            "size": pos.get("available")
         }
         import json
         body_json = json.dumps(body)
+
+        request_path = "/api/mix/v1/order/close-position"
+        url = API_BASE + request_path
         headers = get_headers("POST", request_path, body_json)
-        logger.info(f"Cerrando posición: {url} con body {body_json}")
+        logger.info(f"Cerrando posición {symbol} con payload: {body_json}")
         resp = requests.post(url, headers=headers, data=body_json)
         resp.raise_for_status()
         data = resp.json()
-        if data.get("code") == "00000":
-            logger.info(f"✅ Posición cerrada correctamente para {symbol}")
-            return True
-        else:
-            logger.error(f"Error cerrando posición: {data}")
-            return False
+        logger.info(f"Respuesta cerrar posición: {data}")
+        return data.get("code") == "00000"
     except Exception as e:
         logger.error(f"❌ Error al cerrar posición: {e}")
         return False
@@ -81,22 +95,15 @@ def close_position(symbol: str, hold_side: str):
 async def handle_signal(request: Request):
     payload = await request.json()
     logger.info(f"📨 Payload recibido: {payload}")
-
     signal = payload.get("signal")
     symbol = payload.get("symbol")
-
-    if signal == "EXIT_CONFIRMED" and symbol:
-        positions = get_open_positions()
-        # Buscar posición abierta para ese symbol
-        pos = next((p for p in positions if p.get("symbol") == symbol), None)
-        if not pos:
-            logger.warning(f"No hay posición abierta para {symbol} para cerrar")
-            return JSONResponse(content={"status": "error", "msg": "No position open for symbol"}, status_code=200)
-
-        hold_side = pos.get("holdSide")
-        if close_position(symbol, hold_side):
-            return JSONResponse(content={"status": "success", "msg": f"Position closed for {symbol}"}, status_code=200)
+    if signal == "EXIT_CONFIRMED":
+        success = close_position(symbol)
+        if success:
+            return {"status": "success", "msg": f"Posición {symbol} cerrada"}
         else:
-            return JSONResponse(content={"status": "error", "msg": "No se pudo cerrar posición"}, status_code=200)
+            return {"status": "error", "msg": "No se pudo cerrar posición"}
+    return {"status": "ok", "msg": "Signal no manejado"}
 
-    return JSONResponse(content={"status": "error", "msg": "Signal no manejada o falta symbol"}, status_code=400)
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), log_level="info")
