@@ -1,83 +1,93 @@
-from flask import Flask, request, jsonify
 import os
+import time
+import hmac
+import hashlib
+import json
 import requests
+from fastapi import FastAPI, Request
 import logging
+from typing import Optional
 
-app = Flask(__name__)
+app = FastAPI()
 logging.basicConfig(level=logging.INFO)
 
-API_KEY = os.getenv("API_KEY")
-API_SECRET = os.getenv("API_SECRET")
-API_BASE_URL = "https://api.tu-exchange.com"  # reemplaza por tu endpoint real
+# Bitget API config
+API_KEY = os.getenv("BITGET_API_KEY")
+API_SECRET = os.getenv("BITGET_API_SECRET")
+API_PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
+API_BASE_URL = "https://api.bitget.com"
 
-if not API_KEY or not API_SECRET:
-    app.logger.error("⚠️ API_KEY o API_SECRET no están definidos en variables de entorno")
+PRODUCT_TYPE = "USDT-FUTURES"
 
-HEADERS = {
-    "X-API-KEY": API_KEY,
-    "Content-Type": "application/json"
-}
+def generate_signature(timestamp: str, method: str, request_path: str, body: str = ''):
+    message = f'{timestamp}{method}{request_path}{body}'
+    mac = hmac.new(API_SECRET.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
+    return mac.hexdigest()
 
-def get_open_positions(product_type="USDT-FUTURES"):
+def bitget_headers(method: str, path: str, body: str = ''):
+    timestamp = str(int(time.time() * 1000))
+    sign = generate_signature(timestamp, method, path, body)
+    return {
+        "ACCESS-KEY": API_KEY,
+        "ACCESS-SIGN": sign,
+        "ACCESS-TIMESTAMP": timestamp,
+        "ACCESS-PASSPHRASE": API_PASSPHRASE,
+        "Content-Type": "application/json"
+    }
+
+def get_open_positions():
+    path = f"/api/v2/mix/position/all-position?productType={PRODUCT_TYPE}"
+    url = f"{API_BASE_URL}{path}"
+    headers = bitget_headers("GET", f"/api/v2/mix/position/all-position?productType={PRODUCT_TYPE}")
+    res = requests.get(url, headers=headers)
+    if res.status_code != 200:
+        raise Exception(f"Error al obtener posiciones: {res.text}")
+    return res.json()["data"]
+
+def close_position(symbol: str, margin_coin: str, size: str, hold_side: str):
+    path = "/api/v2/mix/order/close-position"
+    url = f"{API_BASE_URL}{path}"
+    payload = {
+        "symbol": symbol,
+        "marginCoin": margin_coin,
+        "holdSide": hold_side
+    }
+    body = json.dumps(payload)
+    headers = bitget_headers("POST", path, body)
+    res = requests.post(url, headers=headers, data=body)
+    if res.status_code != 200:
+        raise Exception(f"Error al cerrar posición: {res.text}")
+    return res.json()
+
+@app.post("/")
+async def webhook_handler(request: Request):
+    payload = await request.json()
+    signal = payload.get("signal")
+    symbol = payload.get("symbol")
+
+    logging.info(f"📨 Payload recibido: {payload}")
+
+    if signal != "EXIT_CONFIRMED":
+        return {"status": "ignorado"}
+
     try:
-        url = f"{API_BASE_URL}/api/v2/mix/position/all-position?productType={product_type}"
-        app.logger.info(f"📡 Consultando posiciones abiertas: {url}")
-        response = requests.get(url, headers=HEADERS)
-        app.logger.info(f"🔁 Respuesta de posiciones: {response.status_code} - {response.text}")
-        return response.json()
-    except Exception as e:
-        app.logger.error(f"❌ Excepción en get_open_positions: {e}")
-        return None
+        logging.info("📡 Consultando posiciones abiertas")
+        positions = get_open_positions()
 
-def exit_position(symbol, side):
-    try:
-        url = f"{API_BASE_URL}/api/v2/mix/order/submit"
-        payload = {
-            "symbol": symbol,
-            "side": "sell" if side == "long" else "buy",
-            "positionSide": side,
-            "reduceOnly": True,
-            "orderType": "market",
-            "qty": "1"
-        }
-        app.logger.info(f"📤 Enviando orden de salida: {payload}")
-        response = requests.post(url, headers=HEADERS, json=payload)
-        app.logger.info(f"🔁 Respuesta orden: {response.status_code} - {response.text}")
-        return response.json()
-    except Exception as e:
-        app.logger.error(f"❌ Excepción en exit_position: {e}")
-        return None
+        target_position = next((p for p in positions if p["symbol"] == symbol and float(p["total"]) > 0), None)
+        if not target_position:
+            logging.warning(f"⚠️ No se encontró posición abierta para {symbol}")
+            return {"status": "sin posición"}
 
-@app.route("/", methods=["POST"])
-def webhook():
-    try:
-        data = request.json
-        app.logger.info(f"📨 Payload recibido: {data}")
+        margin_coin = target_position["marginCoin"]
+        size = target_position["total"]
+        hold_side = target_position["holdSide"]
 
-        signal = data.get("signal")
-        symbol = data.get("symbol", "").upper()
-
-        if signal == "EXIT_CONFIRMED":
-            positions = get_open_positions()
-            if positions and "data" in positions:
-                for pos in positions["data"]:
-                    if pos["symbol"] == symbol:
-                        side = pos["holdSide"]
-                        result = exit_position(symbol, side)
-                        if result:
-                            return jsonify({"status": "success", "msg": f"Exit confirmado para {symbol}", "result": result})
-                        else:
-                            return jsonify({"status": "error", "msg": "Error cerrando posición"}), 500
-                return jsonify({"status": "error", "msg": f"No hay posición abierta para {symbol}"}), 404
-            else:
-                return jsonify({"status": "error", "msg": "No se pudieron obtener posiciones abiertas"}), 500
-
-        return jsonify({"status": "error", "msg": "Señal desconocida"}), 400
+        logging.info(f"✅ Cerrando posición: {symbol}, {size}, {hold_side}")
+        result = close_position(symbol, margin_coin, size, hold_side)
+        logging.info(f"✅ Resultado del cierre: {result}")
+        return {"status": "cerrado", "result": result}
 
     except Exception as e:
-        app.logger.error(f"❌ Excepción en webhook: {e}")
-        return jsonify({"status": "error", "msg": f"Excepción interna: {str(e)}"}), 500
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
-    app.run(host="0.0.0.0", port=port)
+        logging.error(f"❌ Error procesando la señal: {str(e)}")
+        return {"status": "error", "message": str(e)}
