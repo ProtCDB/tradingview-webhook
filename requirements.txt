@@ -1,4 +1,6 @@
+fastapi
 flask
+uvicorn
 requests
 gunicorn
 python-dotenv
