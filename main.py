@@ -10,15 +10,18 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("main")
 
 API_KEY = os.getenv("BITGET_API_KEY")
-API_SECRET = os.getenv("BITGET_API_SECRET")
+API_SECRET = os.getenv("BITGET_API_SECRET", "").strip()
 API_PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
 
 app = FastAPI()
 
 def sign_request(timestamp: str, method: str, request_path: str, body: str) -> str:
     message = timestamp + method.upper() + request_path + body
+    logger.info(f"Mensaje para firma: {message}")
     hmac_key = hmac.new(API_SECRET.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
-    return hmac_key.hexdigest()
+    sign = hmac_key.hexdigest()
+    logger.info(f"Firma generada: {sign}")
+    return sign
 
 def get_open_positions():
     url = "https://api.bitget.com/api/v2/mix/position/all-position"
@@ -38,12 +41,17 @@ def get_open_positions():
         "ACCESS-SIGN": sign,
         "ACCESS-TIMESTAMP": timestamp,
         "ACCESS-PASSPHRASE": API_PASSPHRASE,
-        "Content-Type": "application/json"
     }
 
     response = requests.get(url, headers=headers, params=params)
-    response.raise_for_status()
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as e:
+        logger.error(f"Error HTTP: {e}, Response content: {response.text}")
+        raise
+
     data = response.json()
+    logger.info(f"Posiciones abiertas recibidas: {data}")
     return data.get("data", [])
 
 def close_position(symbol: str, size: float, hold_side: str) -> bool:
@@ -53,21 +61,23 @@ def close_position(symbol: str, size: float, hold_side: str) -> bool:
     timestamp = str(int(time.time() * 1000))
 
     # Tipo de orden para cerrar posición
-    if hold_side == "long":
-        reduce_only = "close_long"
-    elif hold_side == "short":
-        reduce_only = "close_short"
-    else:
+    side_map = {
+        "long": "close_long",
+        "short": "close_short"
+    }
+
+    if hold_side not in side_map:
         logger.error(f"hold_side desconocido: {hold_side}")
         return False
 
     body_dict = {
         "symbol": symbol,
         "size": str(size),
-        "side": reduce_only,
+        "side": side_map[hold_side],
         "marginCoin": "USDT",
         "orderType": "market"
     }
+
     import json
     body = json.dumps(body_dict)
 
@@ -109,11 +119,13 @@ async def webhook(request: Request):
             logger.error(f"Error consultando posiciones abiertas: {e}")
             return {"status": "error", "message": "Error consultando posiciones abiertas"}
 
+        # Buscar posición abierta para el símbolo
         for pos in positions:
             if pos.get("symbol") == symbol:
                 size = float(pos.get("size", 0))
                 hold_side = pos.get("holdSide")  # "long" o "short"
                 if size > 0:
+                    logger.info(f"Cerrando posición {symbol} de tamaño {size} y lado {hold_side}")
                     success = close_position(symbol, size, hold_side)
                     if success:
                         return {"status": "success", "message": f"Posición {symbol} cerrada"}
@@ -122,4 +134,3 @@ async def webhook(request: Request):
         return {"status": "info", "message": "No se encontró posición abierta para el símbolo"}
     else:
         return {"status": "ignored", "message": "Señal o símbolo inválido"}
-
