@@ -2,23 +2,23 @@ import os
 import time
 import hmac
 import hashlib
-import logging
 import json
+import logging
 import requests
 from fastapi import FastAPI, Request
 
-# Configurar logging
+# Configuración de logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("main")
 
-# Leer variables de entorno
-API_KEY = os.getenv("BITGET_API_KEY")
-API_SECRET = os.getenv("BITGET_API_SECRET")
-API_PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
+# Carga de variables de entorno
+API_KEY = os.getenv("API_KEY") or os.getenv("BITGET_API_KEY")
+API_SECRET = os.getenv("API_SECRET") or os.getenv("BITGET_API_SECRET")
+API_PASSPHRASE = os.getenv("API_PASSPHRASE") or os.getenv("BITGET_API_PASSPHRASE")
 
 if not API_KEY or not API_SECRET or not API_PASSPHRASE:
-    logger.error("❌ Faltan las variables de entorno BITGET_API_KEY, BITGET_API_SECRET o BITGET_API_PASSPHRASE")
-    raise RuntimeError("Variables de entorno API no definidas")
+    logger.error("❌ Faltan las variables de entorno API_KEY, API_SECRET o API_PASSPHRASE")
+    raise RuntimeError("Variables de entorno API_KEY, API_SECRET o API_PASSPHRASE no definidas")
 
 BASE_URL = "https://api.bitget.com"
 PRODUCT_TYPE = "UMCBL"
@@ -31,24 +31,24 @@ def get_timestamp():
 def sign_request(method: str, request_path: str, body: str, timestamp: str) -> dict:
     message = timestamp + method.upper() + request_path + body
     signature = hmac.new(API_SECRET.encode('utf-8'), message.encode('utf-8'), hashlib.sha256).hexdigest()
-    return {
+    headers = {
         "ACCESS-KEY": API_KEY,
         "ACCESS-SIGN": signature,
         "ACCESS-TIMESTAMP": timestamp,
         "ACCESS-PASSPHRASE": API_PASSPHRASE,
         "Content-Type": "application/json"
     }
+    return headers
 
 def get_open_positions(product_type=PRODUCT_TYPE):
     timestamp = get_timestamp()
     path = "/api/mix/v1/position/all-position"
-    full_path = path + f"?productType={product_type}"
-    url = BASE_URL + full_path
-    headers = sign_request("GET", full_path, "", timestamp)
-
-    logger.info(f"Consultando posiciones abiertas: {url}")
+    url = BASE_URL + path
+    headers = sign_request("GET", path, "", timestamp)
+    params = {"productType": product_type}
+    logger.info(f"Consultando posiciones abiertas: {url}?productType={product_type}")
     try:
-        resp = requests.get(url, headers=headers)
+        resp = requests.get(url, headers=headers, params=params)
         resp.raise_for_status()
         data = resp.json()
         return data.get("data", [])
@@ -71,8 +71,8 @@ def close_position(symbol: str, size: float, hold_side: str):
     }
     body = json.dumps(body_dict)
     headers = sign_request("POST", path, body, timestamp)
-
     try:
+        logger.info(f"Cerrando posición con payload: {body}")
         resp = requests.post(url, headers=headers, data=body)
         resp.raise_for_status()
         resp_json = resp.json()
