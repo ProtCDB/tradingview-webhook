@@ -4,23 +4,22 @@ import hmac
 import hashlib
 import requests
 import logging
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("main")
 
-API_KEY = os.getenv("API_KEY")
-API_SECRET = os.getenv("API_SECRET")
-API_PASSPHRASE = os.getenv("API_PASSPHRASE")
+API_KEY = os.getenv("BITGET_API_KEY")
+API_SECRET = os.getenv("BITGET_API_SECRET")
+API_PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
+
+if not API_KEY or not API_SECRET or not API_PASSPHRASE:
+    logger.error("❌ Faltan las variables de entorno BITGET_API_KEY, BITGET_API_SECRET o BITGET_API_PASSPHRASE")
+    raise RuntimeError("Variables de entorno BITGET_API_KEY, BITGET_API_SECRET o BITGET_API_PASSPHRASE no definidas")
 
 BASE_URL = "https://api.bitget.com"
 
 app = FastAPI()
-
-def validate_env_vars():
-    if not API_KEY or not API_SECRET or not API_PASSPHRASE:
-        logger.error("❌ Faltan las variables de entorno API_KEY, API_SECRET o API_PASSPHRASE")
-        raise RuntimeError("Variables de entorno API_KEY, API_SECRET o API_PASSPHRASE no definidas")
 
 def sign_request(method: str, request_path: str, body: str, timestamp: str) -> dict:
     message = timestamp + method.upper() + request_path + body
@@ -81,12 +80,6 @@ def close_position(symbol: str, size: float, hold_side: str):
 
 @app.post("/")
 async def webhook(request: Request):
-    # Validamos que variables estén cargadas al momento de recibir requests
-    try:
-        validate_env_vars()
-    except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
     payload = await request.json()
     logger.info(f"📨 Payload recibido: {payload}")
 
@@ -96,7 +89,6 @@ async def webhook(request: Request):
         return {"status": "error", "msg": "Faltan signal o symbol"}
 
     if signal == "EXIT_CONFIRMED":
-        # Buscar posición abierta para este símbolo
         positions = get_open_positions()
         for pos in positions:
             if pos.get("symbol") == symbol:
@@ -111,16 +103,3 @@ async def webhook(request: Request):
         return {"status": "error", "msg": "No hay posición abierta para cerrar"}
 
     return {"status": "error", "msg": "Señal no reconocida"}
-
-@app.get("/health")
-def health_check():
-    try:
-        validate_env_vars()
-        return {"status": "ok", "msg": "Variables de entorno cargadas correctamente"}
-    except RuntimeError as e:
-        return {"status": "error", "msg": str(e)}
-
-if __name__ == "__main__":
-    validate_env_vars()
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), log_level="info")
