@@ -9,14 +9,14 @@ from fastapi import FastAPI, Request
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("main")
 
-# Cargar variables de entorno
-API_KEY = os.getenv("API_KEY")
-API_SECRET = os.getenv("API_SECRET")
-API_PASSPHRASE = os.getenv("API_PASSPHRASE")
+# Variables de entorno con prefijo BITGET_
+API_KEY = os.getenv("BITGET_API_KEY")
+API_SECRET = os.getenv("BITGET_API_SECRET")
+API_PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
 
 if not API_KEY or not API_SECRET or not API_PASSPHRASE:
-    logger.error("❌ Faltan las variables de entorno API_KEY, API_SECRET o API_PASSPHRASE")
-    raise RuntimeError("Variables de entorno API_KEY, API_SECRET o API_PASSPHRASE no definidas")
+    logger.error("❌ Faltan las variables de entorno BITGET_API_KEY, BITGET_API_SECRET o BITGET_API_PASSPHRASE")
+    raise RuntimeError("Variables de entorno Bitget no definidas")
 
 BASE_URL = "https://api.bitget.com"
 PRODUCT_TYPE = "umcbl"
