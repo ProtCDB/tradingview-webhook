@@ -2,10 +2,9 @@ import os
 import time
 import hmac
 import hashlib
-import json
-import logging
 import requests
 from fastapi import FastAPI, Request
+import logging
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("main")
@@ -14,78 +13,113 @@ API_KEY = os.getenv("BITGET_API_KEY")
 API_SECRET = os.getenv("BITGET_API_SECRET")
 API_PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
 
-if not API_KEY or not API_SECRET or not API_PASSPHRASE:
-    logger.error("❌ Faltan variables BITGET_API_KEY, BITGET_API_SECRET o BITGET_API_PASSPHRASE")
-    raise RuntimeError("Variables de entorno Bitget no definidas")
-
-BASE_URL = "https://api.bitget.com"
-PRODUCT_TYPE = "USDT-FUTURES"  # Debe ir en UPPERCASE según documentación :contentReference[oaicite:1]{index=1}
-MARGIN_COIN = "USDT"
-
 app = FastAPI()
 
-def get_timestamp():
-    return str(int(time.time() * 1000))
+def sign_request(timestamp: str, method: str, request_path: str, body: str) -> str:
+    message = timestamp + method.upper() + request_path + body
+    hmac_key = hmac.new(API_SECRET.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
+    return hmac_key.hexdigest()
 
-def sign_request(method: str, path: str, body: str, timestamp: str):
-    message = timestamp + method.upper() + path + body
-    signature = hmac.new(API_SECRET.encode(), message.encode(), hashlib.sha256).hexdigest()
-    return {
+def get_open_positions():
+    url = "https://api.bitget.com/api/v2/mix/position/all-position"
+    params = {
+        "productType": "USDT-FUTURES",
+        "marginCoin": "USDT"
+    }
+    method = "GET"
+    path = "/api/v2/mix/position/all-position"
+    timestamp = str(int(time.time() * 1000))
+    body = ""
+
+    sign = sign_request(timestamp, method, path, body)
+
+    headers = {
         "ACCESS-KEY": API_KEY,
-        "ACCESS-SIGN": signature,
+        "ACCESS-SIGN": sign,
         "ACCESS-TIMESTAMP": timestamp,
         "ACCESS-PASSPHRASE": API_PASSPHRASE,
         "Content-Type": "application/json"
     }
 
-def get_open_positions():
-    timestamp = get_timestamp()
-    path = "/api/v2/mix/position/all-position"
-    url = BASE_URL + path
-    params = {"productType": PRODUCT_TYPE, "marginCoin": MARGIN_COIN}
-    logger.info(f"Consultando posiciones abiertas: {url}?{params}")
-    headers = sign_request("GET", path, "", timestamp)
-    resp = requests.get(url, headers=headers, params=params)
-    resp.raise_for_status()
-    data = resp.json()
+    response = requests.get(url, headers=headers, params=params)
+    response.raise_for_status()
+    data = response.json()
     return data.get("data", [])
 
-def close_position(symbol: str, size: float, hold_side: str):
-    timestamp = get_timestamp()
+def close_position(symbol: str, size: float, hold_side: str) -> bool:
+    url = "https://api.bitget.com/api/v2/mix/order/place-order"
+    method = "POST"
     path = "/api/v2/mix/order/place-order"
-    url = BASE_URL + path
-    side = "close_long" if hold_side == "long" else "close_short"
-    body = json.dumps({
+    timestamp = str(int(time.time() * 1000))
+
+    # Tipo de orden para cerrar posición
+    if hold_side == "long":
+        reduce_only = "close_long"
+    elif hold_side == "short":
+        reduce_only = "close_short"
+    else:
+        logger.error(f"hold_side desconocido: {hold_side}")
+        return False
+
+    body_dict = {
         "symbol": symbol,
         "size": str(size),
-        "side": side,
-        "type": "market",
-        "reduceOnly": True,
-        "productType": PRODUCT_TYPE,
-        "marginCoin": MARGIN_COIN
-    })
-    logger.info(f"Cerrando {symbol}, side={side}, size={size}")
-    headers = sign_request("POST", path, body, timestamp)
-    resp = requests.post(url, headers=headers, data=body)
-    resp.raise_for_status()
-    return resp.json().get("code") == "00000"
+        "side": reduce_only,
+        "marginCoin": "USDT",
+        "orderType": "market"
+    }
+    import json
+    body = json.dumps(body_dict)
+
+    sign = sign_request(timestamp, method, path, body)
+
+    headers = {
+        "ACCESS-KEY": API_KEY,
+        "ACCESS-SIGN": sign,
+        "ACCESS-TIMESTAMP": timestamp,
+        "ACCESS-PASSPHRASE": API_PASSPHRASE,
+        "Content-Type": "application/json"
+    }
+
+    response = requests.post(url, headers=headers, data=body)
+    if response.status_code == 200:
+        resp_json = response.json()
+        if resp_json.get("code") == "00000":
+            logger.info(f"Orden de cierre enviada para {symbol}")
+            return True
+        else:
+            logger.error(f"Error en orden de cierre: {resp_json}")
+    else:
+        logger.error(f"HTTP error {response.status_code}: {response.text}")
+    return False
 
 @app.post("/")
 async def webhook(request: Request):
     payload = await request.json()
     logger.info(f"📨 Payload recibido: {payload}")
+
     signal = payload.get("signal")
     symbol = payload.get("symbol")
 
     if signal == "EXIT_CONFIRMED" and symbol:
-        positions = get_open_positions()
+        logger.info("Consultando posiciones abiertas...")
+        try:
+            positions = get_open_positions()
+        except Exception as e:
+            logger.error(f"Error consultando posiciones abiertas: {e}")
+            return {"status": "error", "message": "Error consultando posiciones abiertas"}
+
         for pos in positions:
             if pos.get("symbol") == symbol:
-                size = float(pos.get("total", "0"))
-                hold_side = pos.get("holdSide")
-                if size > 0 and hold_side:
+                size = float(pos.get("size", 0))
+                hold_side = pos.get("holdSide")  # "long" o "short"
+                if size > 0:
                     success = close_position(symbol, size, hold_side)
-                    return {"status": "ok" if success else "error", "msg": "Cerrada" if success else "No se pudo cerrar"}
-        logger.warning(f"No hay posición abierta para {symbol}")
-        return {"status": "error", "msg": "No hay posición abierta"}
-    return {"status": "error", "msg": "Señal o símbolo no válido"}
+                    if success:
+                        return {"status": "success", "message": f"Posición {symbol} cerrada"}
+                    else:
+                        return {"status": "error", "message": "Error cerrando posición"}
+        return {"status": "info", "message": "No se encontró posición abierta para el símbolo"}
+    else:
+        return {"status": "ignored", "message": "Señal o símbolo inválido"}
+
