@@ -5,6 +5,8 @@ import hashlib
 import requests
 from fastapi import FastAPI, Request
 import logging
+from urllib.parse import urlencode
+import json
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("main")
@@ -15,7 +17,10 @@ API_PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
 
 app = FastAPI()
 
-def sign_request(timestamp: str, method: str, request_path: str, body: str) -> str:
+def sign_request(timestamp: str, method: str, request_path: str, body: str = "", params: dict = None) -> str:
+    if method.upper() == "GET" and params:
+        query = urlencode(params)
+        request_path += f"?{query}"
     message = timestamp + method.upper() + request_path + body
     logger.info(f"Mensaje para firma: {message}")
     hmac_key = hmac.new(API_SECRET.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
@@ -34,7 +39,7 @@ def get_open_positions():
     timestamp = str(int(time.time() * 1000))
     body = ""
 
-    sign = sign_request(timestamp, method, path, body)
+    sign = sign_request(timestamp, method, path, body, params)
 
     headers = {
         "ACCESS-KEY": API_KEY,
@@ -60,7 +65,6 @@ def close_position(symbol: str, size: float, hold_side: str) -> bool:
     path = "/api/v2/mix/order/place-order"
     timestamp = str(int(time.time() * 1000))
 
-    # Tipo de orden para cerrar posición
     side_map = {
         "long": "close_long",
         "short": "close_short"
@@ -78,7 +82,6 @@ def close_position(symbol: str, size: float, hold_side: str) -> bool:
         "orderType": "market"
     }
 
-    import json
     body = json.dumps(body_dict)
 
     sign = sign_request(timestamp, method, path, body)
@@ -95,7 +98,7 @@ def close_position(symbol: str, size: float, hold_side: str) -> bool:
     if response.status_code == 200:
         resp_json = response.json()
         if resp_json.get("code") == "00000":
-            logger.info(f"Orden de cierre enviada para {symbol}")
+            logger.info(f"✅ Orden de cierre enviada para {symbol}")
             return True
         else:
             logger.error(f"Error en orden de cierre: {resp_json}")
@@ -119,11 +122,10 @@ async def webhook(request: Request):
             logger.error(f"Error consultando posiciones abiertas: {e}")
             return {"status": "error", "message": "Error consultando posiciones abiertas"}
 
-        # Buscar posición abierta para el símbolo
         for pos in positions:
             if pos.get("symbol") == symbol:
                 size = float(pos.get("size", 0))
-                hold_side = pos.get("holdSide")  # "long" o "short"
+                hold_side = pos.get("holdSide")
                 if size > 0:
                     logger.info(f"Cerrando posición {symbol} de tamaño {size} y lado {hold_side}")
                     success = close_position(symbol, size, hold_side)
