@@ -2,63 +2,62 @@ import os
 import time
 import hmac
 import hashlib
-import requests
 import logging
 import json
+import requests
 from fastapi import FastAPI, Request
 
+# Configurar logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("main")
 
-# Cargar variables de entorno (asegúrate de tenerlas definidas en Render)
+# Leer variables de entorno
 API_KEY = os.getenv("BITGET_API_KEY")
 API_SECRET = os.getenv("BITGET_API_SECRET")
 API_PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
 
 if not API_KEY or not API_SECRET or not API_PASSPHRASE:
     logger.error("❌ Faltan las variables de entorno BITGET_API_KEY, BITGET_API_SECRET o BITGET_API_PASSPHRASE")
-    raise RuntimeError("Variables de entorno no definidas")
+    raise RuntimeError("Variables de entorno API no definidas")
 
 BASE_URL = "https://api.bitget.com"
 PRODUCT_TYPE = "UMCBL"
 
 app = FastAPI()
 
+def get_timestamp():
+    return str(int(time.time() * 1000))
+
 def sign_request(method: str, request_path: str, body: str, timestamp: str) -> dict:
     message = timestamp + method.upper() + request_path + body
     signature = hmac.new(API_SECRET.encode('utf-8'), message.encode('utf-8'), hashlib.sha256).hexdigest()
-    headers = {
+    return {
         "ACCESS-KEY": API_KEY,
         "ACCESS-SIGN": signature,
         "ACCESS-TIMESTAMP": timestamp,
         "ACCESS-PASSPHRASE": API_PASSPHRASE,
         "Content-Type": "application/json"
     }
-    return headers
 
-def get_open_positions():
-    timestamp = str(int(time.time() * 1000))
-    path = "/api/mix/v1/position/openPositions"
-    query = f"?productType={PRODUCT_TYPE}"
-    full_path = path + query
+def get_open_positions(product_type=PRODUCT_TYPE):
+    timestamp = get_timestamp()
+    path = "/api/mix/v1/position/all-position"
+    full_path = path + f"?productType={product_type}"
     url = BASE_URL + full_path
     headers = sign_request("GET", full_path, "", timestamp)
+
+    logger.info(f"Consultando posiciones abiertas: {url}")
     try:
-        logger.info(f"Consultando posiciones abiertas: {url}")
         resp = requests.get(url, headers=headers)
         resp.raise_for_status()
         data = resp.json()
-        if data.get("code") == "00000":
-            return data.get("data", [])
-        else:
-            logger.error(f"Error en respuesta get_open_positions: {data}")
-            return []
+        return data.get("data", [])
     except Exception as e:
         logger.error(f"❌ Excepción en get_open_positions: {e}")
         return []
 
 def close_position(symbol: str, size: float, hold_side: str):
-    timestamp = str(int(time.time() * 1000))
+    timestamp = get_timestamp()
     path = "/api/mix/v1/order/placeOrder"
     url = BASE_URL + path
     body_dict = {
@@ -72,8 +71,8 @@ def close_position(symbol: str, size: float, hold_side: str):
     }
     body = json.dumps(body_dict)
     headers = sign_request("POST", path, body, timestamp)
+
     try:
-        logger.info(f"🔻 Cerrando posición: {body_dict}")
         resp = requests.post(url, headers=headers, data=body)
         resp.raise_for_status()
         resp_json = resp.json()
@@ -104,13 +103,11 @@ async def webhook(request: Request):
                 size = float(pos.get("total", "0"))
                 hold_side = pos.get("holdSide")
                 if size > 0:
-                    success = close_position(symbol, size, hold_side)
-                    return {"status": "ok" if success else "error", "msg": "Posición cerrada" if success else "No se pudo cerrar posición"}
+                    if close_position(symbol, size, hold_side):
+                        return {"status": "ok", "msg": "Posición cerrada"}
+                    else:
+                        return {"status": "error", "msg": "No se pudo cerrar posición"}
         logger.warning(f"No hay posición abierta para {symbol} para cerrar")
         return {"status": "error", "msg": "No hay posición abierta para cerrar"}
 
     return {"status": "error", "msg": "Señal no reconocida"}
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
