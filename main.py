@@ -1,39 +1,37 @@
-import os
 import time
 import hmac
 import hashlib
-import json
 import logging
+import os
+from urllib.parse import urlencode
+
 import requests
-from urllib.parse import urlencode, quote
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-# Configurar logs
+# Configura el logger
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("main")
 
-# Cargar credenciales desde entorno
+app = FastAPI()
+
+# Variables de entorno desde Render (con prefijo BITGET_)
 API_KEY = os.getenv("BITGET_API_KEY")
 API_SECRET = os.getenv("BITGET_API_SECRET")
 API_PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
+
 BASE_URL = "https://api.bitget.com"
 
-# Firma de solicitud
-def sign_request(timestamp, method, path, body="", params=None):
-    if method.upper() == "GET" and params:
-        query = urlencode(params, quote_via=quote)
-        path += f"?{query}"
+def sign_request(timestamp, method, path, body=""):
     message = f"{timestamp}{method.upper()}{path}{body}"
     logger.info(f"Mensaje para firma: {message}")
     sign = hmac.new(API_SECRET.encode(), message.encode(), hashlib.sha256).hexdigest()
     logger.info(f"Firma generada: {sign}")
     return sign
 
-# Construir headers autenticados
-def build_headers(method, path, body="", params=None):
+def build_headers(method, path, body=""):
     timestamp = str(int(time.time() * 1000))
-    sign = sign_request(timestamp, method, path, body, params)
+    sign = sign_request(timestamp, method, path, body)
     return {
         "ACCESS-KEY": API_KEY,
         "ACCESS-SIGN": sign,
@@ -42,49 +40,56 @@ def build_headers(method, path, body="", params=None):
         "Content-Type": "application/json"
     }
 
-# Obtener posiciones abiertas
 def get_open_positions():
     logger.info("Consultando posiciones abiertas...")
-    path = "/api/v2/mix/position/all-position"
-    params = {"productType": "USDT-FUTURES", "marginCoin": "USDT"}
-    headers = build_headers("GET", path, params=params)
+    endpoint = "/api/v2/mix/position/all-position"
+    url = f"{BASE_URL}{endpoint}"
+    params = {
+        "productType": "USDT-FUTURES",
+        "marginCoin": "USDT"
+    }
+
+    headers = build_headers("GET", endpoint)
     try:
-        response = requests.get(BASE_URL + path, headers=headers, params=params)
+        response = requests.get(url, headers=headers, params=params)
         response.raise_for_status()
         data = response.json()
-        return data.get("data", {}).get("positions", [])
-    except requests.exceptions.HTTPError as e:
-        logger.error(f"Error HTTP: {e}, Response content: {e.response.text}")
+        return data.get("data", [])
+    except requests.exceptions.HTTPError as http_err:
+        logger.error(f"Error HTTP: {http_err}, Response content: {response.text}")
     except Exception as e:
         logger.error(f"Error consultando posiciones abiertas: {e}")
     return []
 
-# Cerrar posición
 def close_position(symbol, size, hold_side):
-    logger.info(f"⛔ Cerrando posición {symbol} [{hold_side}] tamaño: {size}")
-    path = "/api/v2/mix/order/place-order"
-    side = "close_long" if hold_side == "long" else "close_short"
-    body_data = {
+    logger.info(f"Intentando cerrar posición para {symbol} ({hold_side}) con size {size}")
+    endpoint = "/api/v2/mix/order/place-order"
+    url = f"{BASE_URL}{endpoint}"
+
+    order_type = "close_long" if hold_side == "long" else "close_short"
+
+    payload = {
         "symbol": symbol,
         "marginCoin": "USDT",
-        "size": size,
-        "side": side,
+        "size": str(size),
+        "side": order_type,
         "orderType": "market",
         "productType": "USDT-FUTURES"
     }
-    body_json = json.dumps(body_data, separators=(",", ":"))
-    headers = build_headers("POST", path, body=body_json)
-    try:
-        response = requests.post(BASE_URL + path, headers=headers, data=body_json)
-        response.raise_for_status()
-        logger.info(f"✅ Orden enviada: {response.json()}")
-        return True
-    except requests.exceptions.HTTPError as e:
-        logger.error(f"❌ Error al cerrar posición: {e}, Response: {e.response.text}")
-    return False
 
-# App FastAPI
-app = FastAPI()
+    body = json.dumps(payload)
+    headers = build_headers("POST", endpoint, body)
+
+    try:
+        response = requests.post(url, headers=headers, data=body)
+        response.raise_for_status()
+        logger.info(f"Orden enviada: {response.json()}")
+        return True
+    except requests.exceptions.HTTPError as http_err:
+        logger.error(f"Error HTTP al cerrar posición: {http_err}, Response content: {response.text}")
+    except Exception as e:
+        logger.error(f"Error general al cerrar posición: {e}")
+    return False
 
 @app.post("/")
 async def webhook(request: Request):
@@ -94,16 +99,21 @@ async def webhook(request: Request):
     signal = payload.get("signal")
     symbol = payload.get("symbol")
 
-    if signal != "EXIT_CONFIRMED" or not symbol:
-        return JSONResponse({"status": "ignored", "message": "Señal inválida"})
+    if signal == "EXIT_CONFIRMED" and symbol:
+        positions = get_open_positions()
+        matching = [pos for pos in positions if pos.get("symbol") == symbol]
 
-    positions = get_open_positions()
-    for pos in positions:
-        if pos.get("symbol") == symbol and float(pos.get("total", 0)) > 0:
-            success = close_position(symbol, pos["total"], pos["holdSide"])
+        if matching:
+            pos = matching[0]
+            size = pos.get("total")
+            hold_side = pos.get("holdSide")
+            success = close_position(symbol, size, hold_side)
+
             if success:
-                return {"status": "ok", "message": f"Posición en {symbol} cerrada"}
+                return JSONResponse({"status": "success", "message": f"Posición cerrada: {symbol}"})
             else:
-                return {"status": "error", "message": "No se pudo cerrar la posición"}
-
-    return {"status": "no_position", "message": f"No hay posición abierta en {symbol}"}
+                return JSONResponse({"status": "error", "message": "No se pudo cerrar la posición"}, status_code=500)
+        else:
+            return JSONResponse({"status": "not_found", "message": f"No hay posición abierta para {symbol}"})
+    else:
+        return JSONResponse({"status": "ignored", "message": "Señal no válida o incompleta"})
