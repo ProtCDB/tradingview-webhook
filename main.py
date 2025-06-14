@@ -1,75 +1,60 @@
 import os
 import logging
-from bitget.bitget_api import BitgetApi
 from fastapi import FastAPI, Request
+from pydantic import BaseModel
+from bitget.bitget_api import BitgetApi
+from fastapi.responses import JSONResponse
 
-logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger()
+# Configuración de logs
+logging.basicConfig(level=logging.INFO)
 
+# Inicializar FastAPI
 app = FastAPI()
 
-API_KEY = os.getenv('API_KEY')
-API_SECRET = os.getenv('SECRET_KEY')
-PASSPHRASE = os.getenv('PASSPHRASE')
+# Inicializar Bitget API con claves del entorno
+api_key = os.getenv("BITGET_API_KEY")
+api_secret = os.getenv("BITGET_API_SECRET")
+passphrase = os.getenv("BITGET_API_PASSPHRASE")
 
-bitget_api = BitgetApi(API_KEY, API_SECRET, PASSPHRASE)
+bitget_api = BitgetApi(api_key, api_secret, passphrase)
 
-def safe_str_dict(d):
-    return {str(k): str(v) if v is not None else "" for k, v in d.items()}
+# Modelo del cuerpo esperado
+class SignalRequest(BaseModel):
+    signal: str
+    symbol: str
 
+# Ruta principal (solo POST)
 @app.post("/")
-async def handle_signal(request: Request):
-    payload = await request.json()
-    logger.info(f"📨 Payload recibido: {payload}")
+async def recibir_senal(data: SignalRequest):
+    logging.info(f"📨 Payload recibido: {data.dict()}")
 
-    if payload.get("signal") == "EXIT_CONFIRMED":
-        symbol = payload.get("symbol")
-        if not symbol:
-            return {"status": "error", "message": "symbol is required"}
+    if data.signal == "EXIT_CONFIRMED":
+        logging.info(f"🚨 Intentando cerrar posición para {data.symbol}...")
+        resultado = cerrar_posicion(bitget_api, data.symbol)
+        return JSONResponse(content={"status": "ok", "resultado": resultado})
 
-        try:
-            logger.info(f"🚨 Intentando cerrar posición para {symbol}...")
+    return JSONResponse(content={"status": "ignorado", "mensaje": "Señal no manejada"})
 
-            params = {
-                "productType": "USDT-FUTURES",
-                "marginCoin": "USDT",
-            }
-            params = safe_str_dict(params)
-            logger.info(f"Parámetro para API: {params}")
 
-            response = bitget_api.get("/api/v2/mix/position/all-position", params)
-            logger.debug(f"Respuesta all-position: {response}")
+def cerrar_posicion(bitget_api, symbol):
+    try:
+        product_type = "USDT-FUTURES"
+        margin_coin = "USDT"
 
-            # Buscar posición abierta para el símbolo
-            positions = response.get("data", [])
-            position_to_close = None
-            for pos in positions:
-                if pos.get("symbol") == symbol:
-                    position_to_close = pos
-                    break
+        # Asegurarse de que los parámetros sean strings
+        params = {
+            "productType": str(product_type),
+            "marginCoin": str(margin_coin)
+        }
 
-            if not position_to_close:
-                return {"status": "error", "message": f"No open position found for {symbol}"}
+        logging.info(f"Parámetro para API: {params} (tipos: {[type(v) for v in params.values()]})")
 
-            side = "close_long" if position_to_close.get("positionSide") == "long" else "close_short"
+        # Obtener todas las posiciones abiertas
+        response = bitget_api.get("/api/v2/mix/position/all-position", params)
 
-            close_params = {
-                "symbol": symbol,
-                "side": side,
-                "orderType": "market",
-                "size": position_to_close.get("available"),
-                "reduceOnly": True,
-            }
-            close_params = safe_str_dict(close_params)
-            logger.info(f"Parámetros para cerrar posición: {close_params}")
+        logging.info(f"📊 Respuesta posiciones: {response}")
+        return response
 
-            close_response = bitget_api.post("/api/mix/v1/order/placeOrder", close_params)
-            logger.info(f"Respuesta cierre posición: {close_response}")
-
-            return {"status": "success", "close_response": close_response}
-
-        except Exception as e:
-            logger.error(f"❌ Excepción general: {e}")
-            return {"status": "error", "message": str(e)}
-
-    return {"status": "ignored", "message": "Signal not handled"}
+    except Exception as e:
+        logging.error(f"❌ Excepción general: {e}")
+        return {"error": str(e)}
