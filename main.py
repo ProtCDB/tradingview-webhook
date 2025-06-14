@@ -1,7 +1,7 @@
 import logging
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from pydantic import BaseModel
-from bitget_rest import BitgetRestClient, APIRequestError
+from bitget_api import BitgetRestClient, APIRequestError
 import uuid
 import os
 
@@ -63,20 +63,8 @@ async def handle_signal(payload: SignalPayload):
     elif signal == "ENTRY_SHORT":
         return place_order(symbol, side="sell", size="1")
 
-    elif signal in [
-        "EXIT_CONFIRMED", "EXIT_SHORT_TP", "EXIT_LONG_TP",
-        "EXIT_SHORT_SL", "EXIT_LONG_SL"
-    ]:
-        # Mensajes personalizados por tipo de salida
-        exit_messages = {
-            "EXIT_CONFIRMED": "🚨 Señal de salida manual: EXIT_CONFIRMED",
-            "EXIT_SHORT_TP": "📈 TP alcanzado en posición SHORT",
-            "EXIT_LONG_TP": "📈 TP alcanzado en posición LONG",
-            "EXIT_SHORT_SL": "📉 SL alcanzado en posición SHORT",
-            "EXIT_LONG_SL": "📉 SL alcanzado en posición LONG"
-        }
-        logger.info(exit_messages.get(signal, f"🚨 Señal de salida: {signal}"))
-
+    elif signal in ["EXIT_CONFIRMED", "EXIT_SHORT_TP", "EXIT_LONG_TP", "EXIT_SHORT_SL", "EXIT_LONG_SL"]:
+        logger.info(f"🚨 Señal de salida recibida: {signal}")
         position_data = get_position(symbol)
 
         if not position_data or not position_data.get("data"):
@@ -88,11 +76,11 @@ async def handle_signal(payload: SignalPayload):
         hold_side = position.get("holdSide")
 
         if hold_side == "long":
-            logger.info(f"🛑 Cerrando posición LONG con orden SELL tamaño {size} en {symbol}")
+            logger.info(f"🛑 Cerrando posición LONG con orden SELL tamaño {size} en {symbol} (motivo: {signal})")
             return place_order(symbol, side="sell", size=size)
 
         elif hold_side == "short":
-            logger.info(f"🔁 Cerrando posición SHORT con orden BUY en {symbol}")
+            logger.info(f"🔁 Cerrando posición SHORT con orden BUY tamaño {size} en {symbol} (motivo: {signal})")
             return place_order(symbol, side="buy", size=size)
 
         else:
