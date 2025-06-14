@@ -4,3 +4,4 @@ uvicorn
 requests
 gunicorn
 python-dotenv
+pycryptodome
