@@ -16,8 +16,6 @@ BASE_URL = "https://api.bitget.com"
 PRODUCT_TYPE = "USDT-FUTURES"
 MARGIN_COIN = "USDT"
 
-# ----------------------------
-# Función para obtener símbolo válido (ej: SOLUSDT_UMCBL)
 def get_valid_symbol(input_symbol):
     try:
         url = f"{BASE_URL}/api/v2/mix/market/contracts"
@@ -30,8 +28,6 @@ def get_valid_symbol(input_symbol):
         print("❌ Error obteniendo contratos:", str(e))
     return None
 
-# ----------------------------
-# Función para autenticación en headers
 def auth_headers(method, endpoint, body=""):
     timestamp = str(int(time.time() * 1000))
     prehash = timestamp + method.upper() + endpoint + body
@@ -45,8 +41,6 @@ def auth_headers(method, endpoint, body=""):
         "Content-Type": "application/json"
     }
 
-# ----------------------------
-# Función para colocar orden de entrada (long/short)
 def place_order(symbol, side):
     url = "/api/v2/mix/order/place-order"
     body = {
@@ -54,7 +48,7 @@ def place_order(symbol, side):
         "marginCoin": MARGIN_COIN,
         "side": side,
         "orderType": "market",
-        "size": "1",  # Ajusta el tamaño según convenga
+        "size": "1",
         "timeInForceValue": "normal",
         "productType": PRODUCT_TYPE,
         "marginMode": "isolated"
@@ -64,28 +58,6 @@ def place_order(symbol, side):
     resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
     print(f"🟢 ORDEN {side} → {resp.status_code}, {resp.text}")
 
-# ----------------------------
-# Función para colocar orden de cierre (reduceOnly)
-def place_close_order(symbol, side, size):
-    url = "/api/v2/mix/order/place-order"
-    body = {
-        "symbol": symbol,
-        "marginCoin": MARGIN_COIN,
-        "side": side,
-        "orderType": "market",
-        "size": str(size),
-        "timeInForceValue": "normal",
-        "productType": PRODUCT_TYPE,
-        "marginMode": "isolated",
-        "reduceOnly": True
-    }
-    json_body = json.dumps(body)
-    headers = auth_headers("POST", url, json_body)
-    resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
-    print(f"🔴 ORDEN CIERRE {side} → {resp.status_code}, {resp.text}")
-
-# ----------------------------
-# Función para cerrar posiciones (ya funcionando)
 def close_positions(symbol):
     print("🔄 Señal de cierre recibida.")
     endpoint = f"/api/mix/v1/position/singlePosition"
@@ -118,8 +90,24 @@ def close_positions(symbol):
     except Exception as e:
         print("❌ Error interpretando posición:", str(e))
 
-# ----------------------------
-# Webhook para recibir señales
+def place_close_order(symbol, side, size):
+    url = "/api/v2/mix/order/place-order"
+    body = {
+        "symbol": symbol,
+        "marginCoin": MARGIN_COIN,
+        "side": side,
+        "orderType": "market",
+        "size": str(size),
+        "timeInForceValue": "normal",
+        "productType": PRODUCT_TYPE,
+        "marginMode": "isolated",
+        "reduceOnly": True
+    }
+    json_body = json.dumps(body)
+    headers = auth_headers("POST", url, json_body)
+    resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
+    print(f"🔴 ORDEN CIERRE {side} → {resp.status_code}, {resp.text}")
+
 @app.route("/", methods=["POST"])
 def webhook():
     data = request.json
@@ -147,7 +135,5 @@ def webhook():
 
     return "OK", 200
 
-# ----------------------------
-# Run local server
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
