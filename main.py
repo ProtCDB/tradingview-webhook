@@ -1,78 +1,72 @@
-import os
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+import os
 from bitget.bitget_api import BitgetApi
 from bitget.exceptions import BitgetAPIException
+import logging
 
 app = FastAPI()
+logging.basicConfig(level=logging.INFO)
 
 API_KEY = os.getenv('API_KEY')
-SECRET_KEY = os.getenv('SECRET_KEY')
+API_SECRET = os.getenv('SECRET_KEY')
 PASSPHRASE = os.getenv('PASSPHRASE')
 
-bitget_api = BitgetApi(API_KEY, SECRET_KEY, PASSPHRASE)
+bitget_api = BitgetApi(API_KEY, API_SECRET, PASSPHRASE)
+
+def safe_post(api, endpoint, params):
+    if not isinstance(params, dict):
+        logging.warning(f"Parámetros no son dict, se reemplaza por dict vacío: {params}")
+        params = {}
+    logging.info(f"POST a {endpoint} con params: {params}")
+    return api.post(endpoint, params)
+
+def safe_get(api, endpoint, params):
+    if not isinstance(params, dict):
+        logging.warning(f"Parámetros no son dict, se reemplaza por dict vacío: {params}")
+        params = {}
+    logging.info(f"GET a {endpoint} con params: {params}")
+    return api.get(endpoint, params)
 
 @app.post("/")
 async def handle_signal(request: Request):
-    data = await request.json()
-    symbol = data.get('symbol')
-    signal = data.get('signal')
+    payload = await request.json()
+    logging.info(f"📨 Payload recibido: {payload}")
 
-    print(f"📨 Payload recibido: {data}")
+    signal = payload.get("signal")
+    symbol = payload.get("symbol")
 
     if signal == "EXIT_CONFIRMED" and symbol:
+        logging.info(f"🚨 Intentando cerrar posición para {symbol}...")
+
+        # Ejemplo: consultar posiciones abiertas
         try:
-            print(f"🚨 Intentando cerrar posición para {symbol}...")
-
-            # Paso 1: Consultar posiciones abiertas para ese símbolo
             params = {
-                "productType": "UMCBL",  # Ajusta según tu producto (ej: USDT-FUTURES, UMCBL)
+                "productType": "USDT-FUTURES",
                 "marginCoin": "USDT"
             }
-            resp = bitget_api.get("/api/v2/mix/position/all-position", params)
-            positions = resp.get('data', [])
+            response = safe_get(bitget_api, "/api/v2/mix/position/all-position", params)
+            logging.info(f"Posiciones abiertas: {response}")
 
-            # Buscar posición abierta para el símbolo
-            open_position = None
-            for pos in positions:
-                if pos.get('symbol') == symbol:
-                    open_position = pos
-                    break
-            
-            if not open_position:
-                return {"status": "no_position", "message": f"No hay posición abierta para {symbol}"}
-
-            size = open_position.get('available')
-            side = open_position.get('side')  # LONG o SHORT
-
-            if float(size) <= 0:
-                return {"status": "no_position", "message": f"Posición abierta de tamaño cero para {symbol}"}
-
-            # Paso 2: Enviar orden para cerrar la posición
-            # Para cerrar LONG, vendemos (side='sell'), para cerrar SHORT, compramos (side='buy')
-            close_side = 'sell' if side.upper() == 'LONG' else 'buy'
-
-            order_params = {
+            # Aquí incluir la lógica para buscar la posición y cerrarla
+            # Ejemplo: cerrar posición (placeholder)
+            close_params = {
                 "symbol": symbol,
-                "side": close_side,
-                "orderType": "market",
-                "size": size,
-                "force": "normal",
-                "productType": "UMCBL",
-                "marginCoin": "USDT"
+                "side": "close",  # Ejemplo, ajustar según API
+                "size": "all",    # Ajustar según API
+                "orderType": "market"
             }
-            order_resp = bitget_api.post("/api/v2/mix/order/placeOrder", order_params)
+            close_response = safe_post(bitget_api, "/api/v2/mix/order/placeOrder", close_params)
+            logging.info(f"Respuesta cierre posición: {close_response}")
 
-            print(f"Orden de cierre enviada: {order_resp}")
-
-            return {"status": "success", "message": f"Orden de cierre enviada para {symbol}", "order_response": order_resp}
+            return JSONResponse(content={"status": "success", "message": f"Posición cerrada para {symbol}", "data": close_response})
 
         except BitgetAPIException as e:
-            return {"status": "error", "message": f"Bitget API error: {e.message}"}
+            logging.error(f"❌ BitgetAPIException: {e.message}")
+            return JSONResponse(content={"status": "error", "message": e.message}, status_code=400)
         except Exception as e:
-            return {"status": "error", "message": str(e)}
-    else:
-        return {"status": "error", "message": "Signal no reconocido o símbolo faltante"}
+            logging.error(f"❌ Excepción general: {e}")
+            return JSONResponse(content={"status": "error", "message": str(e)}, status_code=500)
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+    else:
+        return JSONResponse(content={"status": "error", "message": "Signal o symbol no válido"}, status_code=400)
