@@ -39,7 +39,8 @@ def close_position(symbol: str, side: str, size: str):
     params = {
         "symbol": symbol,
         "marginCoin": "USDT",
-        "productType": "USDT-FUTURES",  # ✅ Corregido
+        "productType": "USDT-FUTURES",
+        "marginMode": "isolated",  # ✅ AÑADIDO
         "size": size,
         "side": close_side,
         "orderType": "market"
