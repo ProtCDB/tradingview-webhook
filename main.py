@@ -34,12 +34,13 @@ def get_open_position(symbol: str):
         logger.error(f"❌ Error al obtener posiciones: {e}")
         return None
 
-def close_position(symbol: str, side: str):
+def close_position(symbol: str, side: str, size: str):
     close_side = "sell" if side == "long" else "buy"
     params = {
         "symbol": symbol,
         "marginCoin": "USDT",
-        "size": "0.1",  # Esto se puede ajustar a la cantidad real de la posición
+        "productType": "USDT-FUTURES",  # ✅ Corregido
+        "size": size,
         "side": close_side,
         "orderType": "market"
     }
@@ -60,7 +61,8 @@ async def webhook(payload: SignalPayload):
             for pos in data.get("data", []):
                 if pos.get("symbol") == payload.symbol and float(pos.get("available", 0)) > 0:
                     side = pos.get("holdSide")
-                    close_position(payload.symbol, side)
+                    size = pos.get("available")
+                    close_position(payload.symbol, side, size)
                     break
     return {"status": "ok"}
 
