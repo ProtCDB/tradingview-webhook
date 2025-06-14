@@ -1,9 +1,12 @@
 import os
 import logging
+import urllib.parse
 from fastapi import FastAPI, Request
 from bitget.bitget_api import BitgetApi
+from bitget.exceptions import BitgetAPIException
 
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger()
 
 app = FastAPI()
 
@@ -15,52 +18,64 @@ bitget_api = BitgetApi(API_KEY, API_SECRET, PASSPHRASE)
 
 @app.post("/")
 async def webhook(request: Request):
-    payload = await request.json()
-    logging.info(f"📨 Payload recibido: {payload}")
-
-    signal = payload.get("signal")
-    symbol = payload.get("symbol")
-
-    if signal == "EXIT_CONFIRMED" and symbol:
-        try:
-            logging.info(f"🚨 Intentando cerrar posición para {symbol}...")
-
+    try:
+        payload = await request.json()
+        logger.info(f"📨 Payload recibido: {payload}")
+        
+        signal = payload.get("signal")
+        symbol = payload.get("symbol")
+        
+        if signal == "EXIT_CONFIRMED" and symbol:
+            logger.info(f"🚨 Intentando cerrar posición para {symbol}...")
+            
+            # Parámetros para consultar posiciones abiertas
             params = {
                 "productType": "USDT-FUTURES",
                 "marginCoin": "USDT"
             }
+            query_string = urllib.parse.urlencode(params)
+            logger.info(f"Parámetro para API: {params}")
 
-            # Validar que los params sean strings
-            for k, v in params.items():
-                if not isinstance(v, str):
-                    logging.warning(f"Parametro '{k}' no es string, convirtiendo a str.")
-                    params[k] = str(v)
-                logging.info(f"Parámetro para API: {k} = {params[k]} (tipo: {type(params[k])})")
+            # Petición GET con params en URL
+            response = bitget_api.get(f"/api/v2/mix/position/all-position?{query_string}")
+            positions = response.get("data", [])
 
-            response = bitget_api.get("/api/v2/mix/position/all-position", params)
-            logging.info(f"Respuesta posiciones abiertas: {response}")
+            logger.info(f"Posiciones abiertas: {positions}")
 
-            # Aquí implementar la lógica para cerrar posiciones que coincidan con symbol
-            # Ejemplo:
-            for pos in response.get("data", []):
+            # Filtrar posición que queremos cerrar
+            position_to_close = None
+            for pos in positions:
                 if pos.get("symbol") == symbol:
-                    # Ejemplo simple para cerrar posición: llamar a bitget_api.post(...)
-                    # Ajustar según doc oficial y lógica que quieras
-                    close_params = {
-                        "symbol": symbol,
-                        "side": "close",  # verificar el valor correcto
-                        "size": pos.get("size"),
-                        # otros campos que la API requiera
-                    }
-                    logging.info(f"Intentando cerrar posición con params: {close_params}")
-                    close_resp = bitget_api.post("/api/v2/mix/order/close-position", close_params)
-                    logging.info(f"Respuesta cierre posición: {close_resp}")
-                    return {"status": "success", "message": f"Posición cerrada para {symbol}"}
+                    position_to_close = pos
+                    break
 
-            return {"status": "error", "message": f"No se encontró posición abierta para {symbol}"}
+            if not position_to_close:
+                logger.info(f"No hay posición abierta para {symbol}")
+                return {"status": "ok", "message": f"No hay posición abierta para {symbol}"}
 
-        except Exception as e:
-            logging.error(f"❌ Excepción general: {e}")
-            return {"status": "error", "message": str(e)}
+            # Aquí cerramos la posición con orden de mercado (market)
+            side = "sell" if position_to_close["side"].lower() == "buy" else "buy"
+            close_params = {
+                "symbol": symbol,
+                "side": side,
+                "orderType": "market",
+                "size": str(position_to_close.get("size", "0")),
+                "force": "gtc"
+            }
+            logger.info(f"Cerrando posición con params: {close_params}")
 
-    return {"status": "error", "message": "Signal o symbol no proporcionado"}
+            close_response = bitget_api.post("/api/v2/mix/order/placeOrder", close_params)
+            logger.info(f"Respuesta cierre: {close_response}")
+
+            return {"status": "ok", "message": f"Orden de cierre enviada para {symbol}"}
+
+        else:
+            logger.info("Signal no reconocido o símbolo no proporcionado")
+            return {"status": "ignored", "message": "Signal no reconocido o símbolo no proporcionado"}
+
+    except BitgetAPIException as e:
+        logger.error(f"Error en API Bitget: {e.message}")
+        return {"status": "error", "message": e.message}
+    except Exception as e:
+        logger.error(f"❌ Excepción general: {e}")
+        return {"status": "error", "message": str(e)}
