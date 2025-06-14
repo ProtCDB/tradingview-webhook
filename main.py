@@ -3,58 +3,66 @@ import logging
 from fastapi import FastAPI, Request
 from pydantic import BaseModel
 from bitget.bitget_api import BitgetApi
-from fastapi.responses import JSONResponse
+import uvicorn
 
-# Configuración de logs
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# Inicializar FastAPI
 app = FastAPI()
 
-# Inicializar Bitget API con claves del entorno
-api_key = os.getenv("BITGET_API_KEY")
-api_secret = os.getenv("BITGET_API_SECRET")
-passphrase = os.getenv("BITGET_API_PASSPHRASE")
+API_KEY = os.getenv("BITGET_API_KEY")
+API_SECRET = os.getenv("BITGET_API_SECRET")
+API_PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
 
-bitget_api = BitgetApi(api_key, api_secret, passphrase)
+api = BitgetApi(API_KEY, API_SECRET, API_PASSPHRASE)
 
-# Modelo del cuerpo esperado
-class SignalRequest(BaseModel):
+class SignalPayload(BaseModel):
     signal: str
     symbol: str
 
-# Ruta principal (solo POST)
-@app.post("/")
-async def recibir_senal(data: SignalRequest):
-    logging.info(f"📨 Payload recibido: {data.dict()}")
-
-    if data.signal == "EXIT_CONFIRMED":
-        logging.info(f"🚨 Intentando cerrar posición para {data.symbol}...")
-        resultado = cerrar_posicion(bitget_api, data.symbol)
-        return JSONResponse(content={"status": "ok", "resultado": resultado})
-
-    return JSONResponse(content={"status": "ignorado", "mensaje": "Señal no manejada"})
-
-
-def cerrar_posicion(bitget_api, symbol):
+def get_open_position(symbol: str):
+    params = {
+        "productType": "USDT-FUTURES",
+        "marginCoin": "USDT"
+    }
     try:
-        product_type = "USDT-FUTURES"
-        margin_coin = "USDT"
-
-        # Asegurarse de que los parámetros sean strings
-        params = {
-            "productType": str(product_type),
-            "marginCoin": str(margin_coin)
-        }
-
-        logging.info(f"Parámetro para API: {params} (tipos: {[type(v) for v in params.values()]})")
-
-        # Obtener todas las posiciones abiertas
-        response = bitget_api.get("/api/v2/mix/position/all-position", params)
-
-        logging.info(f"📊 Respuesta posiciones: {response}")
+        logger.info(f"Parámetro para API: {params} (tipos: {[type(v) for v in params.values()]})")
+        response = api.get("/api/v2/mix/position/all-position", params)
+        logger.info(f"📊 Respuesta posiciones: {response}")
         return response
-
     except Exception as e:
-        logging.error(f"❌ Excepción general: {e}")
-        return {"error": str(e)}
+        logger.error(f"❌ Error al obtener posiciones: {e}")
+        return None
+
+def close_position(symbol: str, side: str):
+    close_side = "sell" if side == "long" else "buy"
+    params = {
+        "symbol": symbol,
+        "marginCoin": "USDT",
+        "size": "0.1",  # Esto se puede ajustar a la cantidad real de la posición
+        "side": close_side,
+        "orderType": "market"
+    }
+    try:
+        logger.info(f"🛑 Cerrando posición: {params}")
+        response = api.post("/api/v2/mix/order/place-order", params)
+        logger.info(f"✅ Orden de cierre enviada: {response}")
+    except Exception as e:
+        logger.error(f"❌ Error al cerrar posición: {e}")
+
+@app.post("/")
+async def webhook(payload: SignalPayload):
+    logger.info(f"📨 Payload recibido: {payload.dict()}")
+    if payload.signal == "EXIT_CONFIRMED":
+        logger.info(f"🚨 Intentando cerrar posición para {payload.symbol}...")
+        data = get_open_position(payload.symbol)
+        if data and data.get("code") == "00000":
+            for pos in data.get("data", []):
+                if pos.get("symbol") == payload.symbol and float(pos.get("available", 0)) > 0:
+                    side = pos.get("holdSide")
+                    close_position(payload.symbol, side)
+                    break
+    return {"status": "ok"}
+
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
