@@ -48,7 +48,7 @@ def place_order(symbol: str, side: str, size: str):
         logger.info(f"✅ Orden colocada: {response}")
         return response
     except APIRequestError as e:
-        logger.error(f"❌ Error colocando orden de entrada: {e}")
+        logger.error(f"❌ Error colocando orden: {e}")
         return None
 
 @app.post("/")
@@ -58,9 +58,11 @@ async def handle_signal(payload: SignalPayload):
     logger.info(f"📨 Payload recibido: {{'signal': '{signal}', 'symbol': '{symbol}'}}")
 
     if signal == "ENTRY_LONG":
+        logger.info("➡️ Entrada LONG")
         return place_order(symbol, side="buy", size="1")
 
     elif signal == "ENTRY_SHORT":
+        logger.info("➡️ Entrada SHORT")
         return place_order(symbol, side="sell", size="1")
 
     elif signal in ["EXIT_CONFIRMED", "EXIT_SHORT_TP", "EXIT_LONG_TP", "EXIT_SHORT_SL", "EXIT_LONG_SL"]:
