@@ -1,70 +1,54 @@
-import os
-import logging
-from dotenv import load_dotenv
 from bitget.bitget_api import BitgetApi
 from bitget.exceptions import BitgetAPIException
+from dotenv import load_dotenv
+import os
+import time
 
-# Configurar logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s:%(message)s')
-logger = logging.getLogger('main')
+# Cargar variables de entorno
+load_dotenv()
 
-def main():
-    # Cargar variables de entorno
-    load_dotenv()
-    API_KEY = os.getenv('API_KEY')
-    API_SECRET = os.getenv('SECRET_KEY')
-    PASSPHRASE = os.getenv('PASSPHRASE')
-    DEMO_MODE = os.getenv('DEMO_TRADING', 'false').lower() == 'true'
+API_KEY = os.getenv('API_KEY')
+API_SECRET = os.getenv('SECRET_KEY')
+PASSPHRASE = os.getenv('PASSPHRASE')
+DEMO_MODE = os.getenv('DEMO_TRADING', 'false').lower() == 'true'
 
-    bitget = BitgetApi(API_KEY, API_SECRET, PASSPHRASE)
+bitget_api = BitgetApi(API_KEY, API_SECRET, PASSPHRASE)
 
-    # Ejemplo payload recibido, en tu caso esto vendrá de tu webhook o entrada real
-    payload = {
-        'signal': 'EXIT_CONFIRMED',
-        'symbol': 'SOLUSDT'
-    }
+def cerrar_posicion(symbol):
+    try:
+        print(f"🔍 Consultando posiciones abiertas para {symbol}...")
+        response = bitget_api.get('/api/v2/mix/position/single-position', {
+            "symbol": symbol,
+            "marginCoin": "USDT"
+        })
 
-    if payload.get('signal') == 'EXIT_CONFIRMED':
-        symbol = payload.get('symbol')
-        logger.info(f"📨 Payload recibido: {payload}")
-        logger.info(f"🚨 Intentando cerrar posición para {symbol}...")
+        position_data = response.get('data', {})
+        total = float(position_data.get('total', 0))
 
-        try:
-            # Consultar posiciones abiertas para USDT-FUTURES
-            params = {
-                'productType': 'USDT_FUTURES',  # fíjate que en el SDK puede que el guion bajo sea _ y no -
-                'marginCoin': 'USDT'
-            }
-            response = bitget.get('/api/v2/mix/position/all-position', params)
+        if total == 0:
+            print("✅ No hay posición abierta.")
+            return
 
-            if response.get('code') == '00000':
-                positions = response.get('data', [])
-                # Filtrar posiciones para el symbol
-                pos_symbol = [p for p in positions if p['symbol'].upper() == symbol.upper()]
-                if not pos_symbol:
-                    logger.info(f"No hay posición abierta en {symbol}")
-                    return
+        hold_side = position_data.get('holdSide')
+        side = 'sell' if hold_side == 'long' else 'buy'
 
-                # Cerrar posición(s)
-                for pos in pos_symbol:
-                    side_to_close = 'sell' if pos['side'] == 'buy' else 'buy'  # invertimos lado para cerrar
-                    order_params = {
-                        'symbol': symbol,
-                        'side': side_to_close,
-                        'orderType': 'market',  # cerrar rápido con orden de mercado
-                        'size': str(pos['size']),
-                        'marginCoin': 'USDT',
-                        'positionId': pos['positionId']
-                    }
-                    close_response = bitget.post('/api/v2/mix/order/placeOrder', order_params)
-                    logger.info(f"Respuesta cierre posición: {close_response}")
-            else:
-                logger.error(f"Error consultando posiciones: {response}")
+        close_params = {
+            "symbol": symbol,
+            "marginCoin": "USDT",
+            "size": str(total),
+            "side": side,
+            "orderType": "market",
+            "force": "gtc"
+        }
 
-        except BitgetAPIException as e:
-            logger.error(f"API Exception: {e.message}")
-        except Exception as e:
-            logger.error(f"Error inesperado: {str(e)}")
+        print(f"🚨 Cerrando posición {hold_side} de {total} {symbol} con {side.upper()}...")
+        close_response = bitget_api.post('/api/v2/mix/order/place-order', close_params)
+        print(f"📤 Orden enviada: {close_response}")
+
+    except BitgetAPIException as e:
+        print("❌ Error Bitget:", e.message)
+    except Exception as e:
+        print("❌ Error general:", str(e))
 
 if __name__ == '__main__':
-    main()
+    cerrar_posicion("SOLUSDT")
