@@ -3,7 +3,6 @@ import logging
 from fastapi import FastAPI
 from pydantic import BaseModel
 from bitget.bitget_api import BitgetApi
-import uvicorn
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -66,6 +65,3 @@ async def webhook(payload: SignalPayload):
                     close_position(payload.symbol, side, size)
                     break
     return {"status": "ok"}
-
-if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
