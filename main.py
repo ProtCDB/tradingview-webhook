@@ -1,71 +1,153 @@
 import os
-import logging
-from fastapi import FastAPI, Request
-from pydantic import BaseModel
-from bitget.bitget_api import BitgetApi
-import uvicorn
+import json
+import hmac
+import hashlib
+import base64
+import time
+import requests
+from flask import Flask, request
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-app = FastAPI()
+app = Flask(__name__)
 
 API_KEY = os.getenv("BITGET_API_KEY")
 API_SECRET = os.getenv("BITGET_API_SECRET")
 API_PASSPHRASE = os.getenv("BITGET_API_PASSPHRASE")
+BASE_URL = "https://api.bitget.com"
+PRODUCT_TYPE = "USDT-FUTURES"
+MARGIN_COIN = "USDT"
 
-api = BitgetApi(API_KEY, API_SECRET, API_PASSPHRASE)
-
-class SignalPayload(BaseModel):
-    signal: str
-    symbol: str
-
-def get_open_position(symbol: str):
-    params = {
-        "productType": "USDT-FUTURES",
-        "marginCoin": "USDT"
-    }
+# ----------------------------
+# Función para obtener símbolo válido (ej: SOLUSDT_UMCBL)
+def get_valid_symbol(input_symbol):
     try:
-        logger.info(f"Parámetro para API: {params} (tipos: {[type(v) for v in params.values()]})")
-        response = api.get("/api/v2/mix/position/all-position", params)
-        logger.info(f"📊 Respuesta posiciones: {response}")
-        return response
+        url = f"{BASE_URL}/api/v2/mix/market/contracts"
+        resp = requests.get(url, params={"productType": PRODUCT_TYPE})
+        contracts = resp.json().get("data", [])
+        for c in contracts:
+            if c["symbol"].startswith(input_symbol):
+                return c["symbol"]
     except Exception as e:
-        logger.error(f"❌ Error al obtener posiciones: {e}")
-        return None
+        print("❌ Error obteniendo contratos:", str(e))
+    return None
 
-def close_position(symbol: str, side: str, size: str):
-    close_side = "sell" if side == "long" else "buy"
-    params = {
+# ----------------------------
+# Función para autenticación en headers
+def auth_headers(method, endpoint, body=""):
+    timestamp = str(int(time.time() * 1000))
+    prehash = timestamp + method.upper() + endpoint + body
+    sign = hmac.new(API_SECRET.encode(), prehash.encode(), hashlib.sha256).digest()
+    signature = base64.b64encode(sign).decode()
+    return {
+        "ACCESS-KEY": API_KEY,
+        "ACCESS-SIGN": signature,
+        "ACCESS-TIMESTAMP": timestamp,
+        "ACCESS-PASSPHRASE": API_PASSPHRASE,
+        "Content-Type": "application/json"
+    }
+
+# ----------------------------
+# Función para colocar orden de entrada (long/short)
+def place_order(symbol, side):
+    url = "/api/v2/mix/order/place-order"
+    body = {
         "symbol": symbol,
-        "marginCoin": "USDT",
-        "productType": "USDT-FUTURES",
-        "marginMode": "isolated",  # ✅ AÑADIDO
-        "size": size,
-        "side": close_side,
-        "orderType": "market"
+        "marginCoin": MARGIN_COIN,
+        "side": side,
+        "orderType": "market",
+        "size": "1",  # Ajusta el tamaño según convenga
+        "timeInForceValue": "normal",
+        "productType": PRODUCT_TYPE,
+        "marginMode": "isolated"
     }
+    json_body = json.dumps(body)
+    headers = auth_headers("POST", url, json_body)
+    resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
+    print(f"🟢 ORDEN {side} → {resp.status_code}, {resp.text}")
+
+# ----------------------------
+# Función para colocar orden de cierre (reduceOnly)
+def place_close_order(symbol, side, size):
+    url = "/api/v2/mix/order/place-order"
+    body = {
+        "symbol": symbol,
+        "marginCoin": MARGIN_COIN,
+        "side": side,
+        "orderType": "market",
+        "size": str(size),
+        "timeInForceValue": "normal",
+        "productType": PRODUCT_TYPE,
+        "marginMode": "isolated",
+        "reduceOnly": True
+    }
+    json_body = json.dumps(body)
+    headers = auth_headers("POST", url, json_body)
+    resp = requests.post(BASE_URL + url, headers=headers, data=json_body)
+    print(f"🔴 ORDEN CIERRE {side} → {resp.status_code}, {resp.text}")
+
+# ----------------------------
+# Función para cerrar posiciones (ya funcionando)
+def close_positions(symbol):
+    print("🔄 Señal de cierre recibida.")
+    endpoint = f"/api/mix/v1/position/singlePosition"
+    params = f"?symbol={symbol}&marginCoin={MARGIN_COIN}"
+    full_endpoint = endpoint + params
+    headers = auth_headers("GET", full_endpoint)
+    print(f"📡 Llamando a endpoint: {full_endpoint}")
+    resp = requests.get(BASE_URL + full_endpoint, headers=headers)
+
+    if resp.status_code != 200:
+        print(f"❌ Error al obtener posición: Status {resp.status_code} - {resp.text}")
+        return
+
+    data = resp.json()
+    position = data.get("data")
+    if not position:
+        print("⚠️ No hay posición abierta para cerrar.")
+        return
+
     try:
-        logger.info(f"🛑 Cerrando posición: {params}")
-        response = api.post("/api/v2/mix/order/place-order", params)
-        logger.info(f"✅ Orden de cierre enviada: {response}")
+        long_pos = float(position.get("long", {}).get("available", 0))
+        short_pos = float(position.get("short", {}).get("available", 0))
+
+        if long_pos > 0:
+            print("🔴 Cerrando LONG...")
+            place_close_order(symbol, "SELL", long_pos)
+        if short_pos > 0:
+            print("🔴 Cerrando SHORT...")
+            place_close_order(symbol, "BUY", short_pos)
     except Exception as e:
-        logger.error(f"❌ Error al cerrar posición: {e}")
+        print("❌ Error interpretando posición:", str(e))
 
-@app.post("/")
-async def webhook(payload: SignalPayload):
-    logger.info(f"📨 Payload recibido: {payload.dict()}")
-    if payload.signal == "EXIT_CONFIRMED":
-        logger.info(f"🚨 Intentando cerrar posición para {payload.symbol}...")
-        data = get_open_position(payload.symbol)
-        if data and data.get("code") == "00000":
-            for pos in data.get("data", []):
-                if pos.get("symbol") == payload.symbol and float(pos.get("available", 0)) > 0:
-                    side = pos.get("holdSide")
-                    size = pos.get("available")
-                    close_position(payload.symbol, side, size)
-                    break
-    return {"status": "ok"}
+# ----------------------------
+# Webhook para recibir señales
+@app.route("/", methods=["POST"])
+def webhook():
+    data = request.json
+    print("📨 Payload recibido:", data)
+    signal = data.get("signal")
+    raw_symbol = data.get("symbol", "").upper()
 
+    real_symbol = get_valid_symbol(raw_symbol)
+    if not real_symbol:
+        print(f"❌ Símbolo no válido: {raw_symbol}")
+        return "Invalid symbol", 400
+
+    print(f"✅ Símbolo real encontrado: {real_symbol}")
+
+    if signal == "ENTRY_LONG":
+        print("🚀 Entrada LONG")
+        place_order(real_symbol, "BUY")
+    elif signal == "ENTRY_SHORT":
+        print("📉 Entrada SHORT")
+        place_order(real_symbol, "SELL")
+    elif signal and signal.startswith("EXIT"):
+        close_positions(real_symbol)
+    else:
+        print("⚠️ Señal desconocida:", signal)
+
+    return "OK", 200
+
+# ----------------------------
+# Run local server
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+    app.run(host="0.0.0.0", port=10000)
