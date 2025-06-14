@@ -11,6 +11,11 @@ jobs:
     steps:
       - name: Send ping to Render webhook
         run: |
-          curl -s -X POST https://tradingview-webhook-3b2x.onrender.com \
+          response=$(curl -s -o /dev/null -w "%{http_code}" -X POST https://tradingview-webhook-3b2x.onrender.com \
           -H "Content-Type: application/json" \
-          -d '{"signal":"PING","symbol":"SOLUSDT"}'
+          -d '{"signal":"PING","symbol":"SOLUSDT"}')
+          echo "Response code: $response"
+          if [ "$response" -ne 200 ]; then
+            echo "Ping failed with status code $response"
+            exit 1
+          fi
