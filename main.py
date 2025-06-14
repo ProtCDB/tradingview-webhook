@@ -2,7 +2,7 @@ import os
 import logging
 from fastapi import FastAPI
 from pydantic import BaseModel
-from bitget.bitget_api import BitgetApi
+from bitget.bitget_api import BitgetApi  # Asumo tu cliente API personalizado
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -19,52 +19,39 @@ class SignalPayload(BaseModel):
     signal: str
     symbol: str
 
-def get_valid_symbol(input_symbol):
-    # Obtener el símbolo real válido (ej: SOLUSDT_UMCBL)
-    try:
-        params = {"productType": "USDT-FUTURES"}
-        response = api.get("/api/v2/mix/market/contracts", params)
-        contracts = response.get("data", [])
-        for c in contracts:
-            if c["symbol"].startswith(input_symbol):
-                return c["symbol"]
-    except Exception as e:
-        logger.error(f"❌ Error obteniendo contratos: {e}")
-    return None
-
-def place_order(symbol: str, side: str, size: str = "1"):
+def place_order(symbol: str, side: str):
     params = {
         "symbol": symbol,
         "marginCoin": "USDT",
-        "side": side,
-        "orderType": "market",
-        "size": size,
-        "timeInForceValue": "normal",
         "productType": "USDT-FUTURES",
-        "marginMode": "isolated"
+        "marginMode": "isolated",
+        "size": "1",
+        "side": side.lower(),  # "buy" o "sell"
+        "orderType": "market"
     }
     try:
-        logger.info(f"🟢 Enviando orden {side} para {symbol} con tamaño {size}")
+        logger.info(f"🟢 Colocando orden {side.upper()} en {symbol} con params: {params}")
         response = api.post("/api/v2/mix/order/place-order", params)
-        logger.info(f"✅ Orden enviada: {response}")
+        logger.info(f"✅ Orden colocada: {response}")
     except Exception as e:
-        logger.error(f"❌ Error al enviar orden: {e}")
+        logger.error(f"❌ Error colocando orden: {e}")
 
-def get_open_positions(symbol: str):
+def get_open_position(symbol: str):
     params = {
         "productType": "USDT-FUTURES",
         "marginCoin": "USDT"
     }
     try:
         response = api.get("/api/v2/mix/position/all-position", params)
+        logger.info(f"📊 Posiciones obtenidas: {response}")
         return response
     except Exception as e:
-        logger.error(f"❌ Error al obtener posiciones: {e}")
+        logger.error(f"❌ Error obteniendo posiciones: {e}")
         return None
 
 def close_position(symbol: str, side: str, size: str):
-    # side: "long" o "short" para saber la dirección que tenemos abierta
-    close_side = "sell" if side == "long" else "buy"
+    # Para cerrar LONG, enviamos una orden SELL; para cerrar SHORT, enviamos BUY
+    close_side = "sell" if side.lower() == "long" else "buy"
     params = {
         "symbol": symbol,
         "marginCoin": "USDT",
@@ -76,40 +63,36 @@ def close_position(symbol: str, side: str, size: str):
         "reduceOnly": True
     }
     try:
-        logger.info(f"🛑 Cerrando posición {side} para {symbol} tamaño {size}")
+        logger.info(f"🛑 Cerrando posición {side.upper()} con orden {close_side.upper()} tamaño {size} en {symbol}")
         response = api.post("/api/v2/mix/order/place-order", params)
         logger.info(f"✅ Orden de cierre enviada: {response}")
     except Exception as e:
-        logger.error(f"❌ Error al cerrar posición: {e}")
+        logger.error(f"❌ Error cerrando posición: {e}")
 
 @app.post("/")
 async def webhook(payload: SignalPayload):
     logger.info(f"📨 Payload recibido: {payload.dict()}")
-    signal = payload.signal.upper()
-    raw_symbol = payload.symbol.upper()
+    symbol = payload.symbol.upper()
+    signal = payload.signal.lower()
 
-    real_symbol = get_valid_symbol(raw_symbol)
-    if not real_symbol:
-        logger.error(f"❌ Símbolo no válido: {raw_symbol}")
-        return {"status": "error", "detail": "Invalid symbol"}
+    if signal == "entry_long":
+        place_order(symbol, "buy")
 
-    # ENTRADAS
-    if signal == "ENTRY_LONG":
-        place_order(real_symbol, "buy")
-    elif signal == "ENTRY_SHORT":
-        place_order(real_symbol, "sell")
+    elif signal == "entry_short":
+        place_order(symbol, "sell")
 
-    # SALIDAS (usar la lógica exit_confirmed para todas las salidas)
-    elif signal in ["EXIT_CONFIRMED", "EXIT_LONG_TP", "EXIT_LONG_SL", "EXIT_SHORT_TP", "EXIT_SHORT_SL"]:
-        data = get_open_positions(real_symbol)
-        if data and data.get("code") == "00000":
-            positions = data.get("data", [])
-            for pos in positions:
-                if pos.get("symbol") == real_symbol and float(pos.get("available", 0)) > 0:
+    elif signal in ["exit_confirmed", "exit_long_tp", "exit_long_sl", "exit_short_tp", "exit_short_sl"]:
+        positions_data = get_open_position(symbol)
+        if positions_data and positions_data.get("code") == "00000":
+            for pos in positions_data.get("data", []):
+                if pos.get("symbol") == symbol and float(pos.get("available", 0)) > 0:
                     side = pos.get("holdSide")  # "long" o "short"
                     size = pos.get("available")
-                    close_position(real_symbol, side, size)
+                    close_position(symbol, side, size)
                     break
+        else:
+            logger.warning(f"⚠️ No posiciones abiertas o error obteniendo posiciones para {symbol}")
+
     else:
         logger.warning(f"⚠️ Señal desconocida: {signal}")
 
@@ -117,4 +100,4 @@ async def webhook(payload: SignalPayload):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
