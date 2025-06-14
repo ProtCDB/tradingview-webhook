@@ -1,111 +1,68 @@
-import time
-import hmac
-import hashlib
-import logging
-import requests
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from flask import Flask, request, jsonify
+from bitget.bitget_api import BitgetApi
+from bitget.exceptions import BitgetAPIException
+from dotenv import load_dotenv
+import os
 
-app = FastAPI()
+# Cargar entorno
+load_dotenv(dotenv_path='.env')
+env_type = os.getenv('APP_ENV', 'dev')
+if env_type == 'production':
+    load_dotenv(dotenv_path='.env.production')
+else:
+    load_dotenv(dotenv_path='.env.dev')
 
-# Configura el logger
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("main")
+# Flask app
+app = Flask(__name__)
 
-# Credenciales reales Bitget
-API_KEY = "TU_API_KEY"
-API_SECRET = "TU_API_SECRET"
-PASSPHRASE = "TU_PASSPHRASE"
-BASE_URL = "https://api.bitget.com"
+# Cierre de posición
+def close_position(symbol="SOLUSDT", margin_coin="USDT"):
+    API_KEY = os.getenv('API_KEY')
+    API_SECRET = os.getenv('SECRET_KEY')
+    PASSPHRASE = os.getenv('PASSPHRASE')
 
-HEADERS_BASE = {
-    "Content-Type": "application/json",
-    "ACCESS-KEY": API_KEY,
-    "ACCESS-PASSPHRASE": PASSPHRASE
-}
+    bitget_api = BitgetApi(API_KEY, API_SECRET, PASSPHRASE)
 
-def generar_firma(timestamp, metodo, request_path, cuerpo=""):
-    mensaje = f"{timestamp}{metodo}{request_path}{cuerpo}"
-    firma = hmac.new(API_SECRET.encode(), mensaje.encode(), hashlib.sha256).hexdigest()
-    return firma
-
-def obtener_posiciones():
     try:
-        timestamp = str(int(time.time() * 1000))
-        metodo = "GET"
-        request_path = "/api/v2/mix/position/all-position"
-        query_string = "productType=USDT-FUTURES&marginCoin=USDT"
-        url = f"{BASE_URL}{request_path}?{query_string}"
-        
-        firma = generar_firma(timestamp, metodo, request_path)
-        
-        headers = {
-            **HEADERS_BASE,
-            "ACCESS-SIGN": firma,
-            "ACCESS-TIMESTAMP": timestamp
+        # Obtener posiciones abiertas
+        params = {
+            "productType": "USDT-FUTURES",
+            "marginCoin": margin_coin
         }
+        position_data = bitget_api.get("/api/v2/mix/position/all-position", params)
 
-        logger.info(f"🔑 Firma generada: {firma}")
-        respuesta = requests.get(url, headers=headers)
-        respuesta.raise_for_status()
-        return respuesta.json()
-    except requests.exceptions.RequestException as e:
-        logger.error(f"❌ Error HTTP: {e}")
-        raise
-    except Exception as e:
-        logger.error(f"❌ Excepción general: {e}")
-        raise
+        for pos in position_data.get("data", []):
+            if pos["symbol"] == symbol and float(pos["total"]) > 0:
+                close_side = "sell" if pos["holdSide"] == "long" else "buy"
+                close_order = {
+                    "symbol": symbol,
+                    "marginCoin": margin_coin,
+                    "side": close_side,
+                    "size": pos["total"],
+                    "price": "",
+                    "orderType": "market",
+                    "tradeSide": "close",
+                    "productType": "USDT-FUTURES"
+                }
+                response = bitget_api.post("/api/v2/mix/order/place-order", close_order)
+                return {"status": "closed", "response": response}
 
-def cerrar_posicion(symbol):
-    posiciones = obtener_posiciones()
+        return {"status": "no_position", "message": f"No hay posición abierta en {symbol}"}
 
-    for pos in posiciones.get("data", []):
-        if pos.get("symbol") == symbol and float(pos.get("total")) != 0:
-            lado = "close_long" if pos["holdSide"] == "long" else "close_short"
-            size = pos["total"]
-            
-            timestamp = str(int(time.time() * 1000))
-            metodo = "POST"
-            request_path = "/api/v2/mix/order/close-position"
-            url = BASE_URL + request_path
+    except BitgetAPIException as e:
+        return {"status": "error", "message": e.message}
 
-            cuerpo = {
-                "symbol": symbol,
-                "marginCoin": "USDT",
-                "holdSide": pos["holdSide"]
-            }
+# Endpoint para recibir señal
+@app.route("/", methods=["POST"])
+def webhook():
+    data = request.json
+    symbol = data.get("symbol", "SOLUSDT")
+    signal = data.get("signal", "")
 
-            import json
-            cuerpo_json = json.dumps(cuerpo, separators=(',', ':'))
-            firma = generar_firma(timestamp, metodo, request_path, cuerpo_json)
+    if signal == "EXIT_CONFIRMED":
+        result = close_position(symbol)
+        return jsonify(result), 200
+    return jsonify({"status": "ignored", "message": "No action taken"}), 200
 
-            headers = {
-                **HEADERS_BASE,
-                "ACCESS-SIGN": firma,
-                "ACCESS-TIMESTAMP": timestamp
-            }
-
-            logger.info(f"📤 Cerrando posición: {cuerpo}")
-            respuesta = requests.post(url, headers=headers, json=cuerpo)
-            respuesta.raise_for_status()
-            return {"status": "success", "data": respuesta.json()}
-    
-    return {"status": "no_position", "message": f"No hay posición abierta en {symbol}"}
-
-@app.post("/")
-async def recibir_senal(request: Request):
-    payload = await request.json()
-    logger.info(f"📨 Payload recibido: {payload}")
-
-    signal = payload.get("signal")
-    symbol = payload.get("symbol")
-
-    if signal == "EXIT_CONFIRMED" and symbol:
-        logger.info(f"🚨 Intentando cerrar posición para {symbol}...")
-        try:
-            resultado = cerrar_posicion(symbol)
-            return JSONResponse(content=resultado)
-        except Exception as e:
-            return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
-    
-    return JSONResponse(content={"status": "ignored", "message": "Señal no reconocida"})
+if __name__ == '__main__':
+    app.run(debug=False)
