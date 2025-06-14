@@ -1,54 +1,60 @@
+from fastapi import FastAPI, Request
+from dotenv import load_dotenv
 from bitget.bitget_api import BitgetApi
 from bitget.exceptions import BitgetAPIException
-from dotenv import load_dotenv
 import os
-import time
+import logging
 
-# Cargar variables de entorno
-load_dotenv()
+# Configuración de logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("main")
 
+# Cargar .env según entorno
+env_type = os.getenv('APP_ENV', 'dev')
+if env_type == 'production':
+    load_dotenv('.env.production')
+else:
+    load_dotenv('.env.dev')
+
+# Inicializar FastAPI
+app = FastAPI()
+
+# Cargar claves
 API_KEY = os.getenv('API_KEY')
 API_SECRET = os.getenv('SECRET_KEY')
 PASSPHRASE = os.getenv('PASSPHRASE')
-DEMO_MODE = os.getenv('DEMO_TRADING', 'false').lower() == 'true'
+demo_mode = os.getenv("DEMO_TRADING", "false").lower() == "true"
 
+# Inicializar cliente Bitget
 bitget_api = BitgetApi(API_KEY, API_SECRET, PASSPHRASE)
 
-def cerrar_posicion(symbol):
-    try:
-        print(f"🔍 Consultando posiciones abiertas para {symbol}...")
-        response = bitget_api.get('/api/v2/mix/position/single-position', {
-            "symbol": symbol,
-            "marginCoin": "USDT"
-        })
+@app.post("/")
+async def recibir_senal(request: Request):
+    payload = await request.json()
+    logger.info(f"📨 Payload recibido: {payload}")
 
-        position_data = response.get('data', {})
-        total = float(position_data.get('total', 0))
+    symbol = payload.get("symbol")
+    signal = payload.get("signal")
 
-        if total == 0:
-            print("✅ No hay posición abierta.")
-            return
+    if signal == "EXIT_CONFIRMED":
+        logger.info(f"🚨 Intentando cerrar posición para {symbol}...")
+        try:
+            response = bitget_api.get(
+                "/api/v2/mix/position/all-position",
+                {
+                    "productType": "USDT-FUTURES",
+                    "marginCoin": "USDT"
+                }
+            )
+            logger.info(f"✅ Respuesta de posiciones abiertas: {response}")
+            # Aquí se podría analizar la posición y ejecutar una orden de cierre si existe
 
-        hold_side = position_data.get('holdSide')
-        side = 'sell' if hold_side == 'long' else 'buy'
+            return {"status": "ok", "detalle": "Consulta completada", "response": response}
+        except BitgetAPIException as e:
+            logger.error(f"❌ Bitget API Error: {e.message}")
+            return {"status": "error", "detalle": e.message}
+        except Exception as e:
+            logger.error(f"❌ Excepción general: {str(e)}")
+            return {"status": "error", "detalle": str(e)}
 
-        close_params = {
-            "symbol": symbol,
-            "marginCoin": "USDT",
-            "size": str(total),
-            "side": side,
-            "orderType": "market",
-            "force": "gtc"
-        }
-
-        print(f"🚨 Cerrando posición {hold_side} de {total} {symbol} con {side.upper()}...")
-        close_response = bitget_api.post('/api/v2/mix/order/place-order', close_params)
-        print(f"📤 Orden enviada: {close_response}")
-
-    except BitgetAPIException as e:
-        print("❌ Error Bitget:", e.message)
-    except Exception as e:
-        print("❌ Error general:", str(e))
-
-if __name__ == '__main__':
-    cerrar_posicion("SOLUSDT")
+    return {"status": "ignored", "detalle": "No es una señal de salida"}
